@@ -1,13 +1,21 @@
-# file: schwab_manual_login.py
+import os
+import sys
+from pathlib import Path
 
 from schwab.auth import client_from_manual_flow
 from schwab.client import Client
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from Quantapp.secrets import load_project_env, require_secret
+
 # ====== Step 1: Set your credentials ======
-CLIENT_ID = "YOUR_CLIENT_ID"        # From Schwab Developer Portal
-APP_SECRET = "YOUR_APP_SECRET"      # From Schwab Developer Portal
-CALLBACK_URL = "https://127.0.0.1:8182/callback"  # Must match your app
-TOKEN_PATH = "schwab_token.json"    # Where tokens will be saved
+load_project_env()
+
+CLIENT_ID = require_secret("SCHWAB_CLIENT_ID")
+APP_SECRET = require_secret("SCHWAB_APP_SECRET")
+CALLBACK_URL = os.getenv("SCHWAB_CALLBACK_URL", "https://127.0.0.1:8182")
+TOKEN_PATH = os.getenv("SCHWAB_TOKEN_PATH", "schwab_token.json")
 
 # ====== Step 2: Start manual OAuth flow ======
 # This will print a URL and prompt you to open it in your browser
@@ -55,4 +63,3 @@ for p in options_positions:
         "expiry": i.get("maturityDate"),
         "qty": qty
     })
-s

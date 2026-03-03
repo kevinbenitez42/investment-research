@@ -14,6 +14,9 @@ quantapp.egg-info/
 .env
 .venv/
 venv/
+schwab_token.json
+*.token.json
+*schwab_token*.json
 
 # Editor state
 .vscode/
