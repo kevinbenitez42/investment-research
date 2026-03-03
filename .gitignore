@@ -1,0 +1,23 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Jupyter artifacts
+.ipynb_checkpoints/
+
+# Local data and generated files
+company_data/
+csv_files/
+quantapp.egg-info/
+
+# Local environment files
+.env
+.venv/
+venv/
+
+# Editor state
+.vscode/
+
+# Local scratch files
+1
+

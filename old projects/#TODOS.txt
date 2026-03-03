@@ -1,0 +1,103 @@
+Analysis - Bottom Up
+--------------------
+Calculate the assets Relative Performance in terms of ...
+    1. Relative Momentum (Sector, Industry, SubIndustry)
+    2. Sharpe
+    3. Treynor (Sector, Industry, SubIndustry)
+    4. Alpha (Sector, Industry, SubIndustry)
+    5. Beta (Sector, Industry, SubIndustry)
+    6. Standard deviation / Semi Standard deviation / Yang Zhang
+
+Create sort of machine learning pipeline for manipulating and tranforming features your data
+
+Create a factor analysis methods for evaluateing predictability of stocks
+
+Find a reliable multivriate time series machine learning model you can use to train / test
+
+Evaluate the results of and Convergence of the models parameters to predict the output so you can tune it
+
+
+
+
+
+Analysis - Top Down
+-------------------
+Pull data for all 500 Consituents in the S&P 500
+
+Evaluate the Highest Sharpe vs lowest Sharpe
+
+Evaluate Highest Beta vs lowest Beta
+
+Calculate Relative Performance for each major markete and
+
+Import VIX term data from the CBOE
+
+Evalulate capital markets indicators that can be useful for estimating ERP
+
+Create An index using a form of PCA for each industry / Sector not based on market cap
+
+
+
+
+
+Analysis - Portfolio
+--------------
+Create individual pie charts that show the consitutient Industries for each Sector
+Calculate the rolling historical average internal correlation.
+Find the assets that have the smallest(more important) / Highest average Internal correlation to your portfolio
+
+Create indicies composed of similar sectors and asset groups, and create a pairwise plot to evaluate 
+distribution characteristics
+
+Do seperate rankings for correlation
+
+have an existential crisis about using percent returns instead of absolute prices for correlations and other statistics
+
+Analyze your short term positions and create a system to hedge gamma for these portfolios using pairs trades 
+
+Begin to implement greek portfolio managment for implementing delta , gamma, and vega neutral strategies
+
+Compute Greek ratios for your portfolio
+
+Obviously Gamma will always be to much, so find a greek ratio that better represents what quanity of gamma is tolerable for the risk/reward
+
+Give the highest level overview of your greeks and underlying risk profile at the top of your notebook
+
+Automate Portfolio objective overview
+
+Use a form of graph theory to dynamically allocate captial to the most efficeint componetns wihtin a criteria (Industry, Beta, Asset class,etc..) using https://www.youtube.com/watch?v=bYAdKuV281k
+
+Calculate and visualize the delta offsett of the distribution of your portfolio
+
+Evaluate the Skew and Kurtosis of your portfolio compared with the benchmark(S&P500)
+
+for some reason, BRK/B is not processed correctly when loading portfolio, fix it
+
+ potential for an asset with its consitutients
+
+
+
+ Side Projects
+ -------------
+
+Calculate and Compare differnet GARCH models
+
+Calcualte Option Chains and their greeks for a stock given price
+
+Learn about and implement differnt Portfolio optimization techniques
+
+
+
+Quantapp 
+--------
+Directly import watchlist from TD ameritrade
+
+Resize your graphs so they arent different size. do so dynamically
+
+Learning
+--------
+Learn streamlit / Plotly and create UIs that make this less clunky
+Filter out learning resources by which directly effects your skillset
+Learn some Github
+Learn about multivariate analysis techniques and how to apply them to your portfolio
+Learn about how to effectively hedge vega and delta

@@ -1,0 +1,44 @@
+Analysis_Forecast
+-----------------
+Objective: Forecast stock prices & Volatility 1 - 21 days out
+
+core libararies = Darts , tsfresh , arch, sklearn , Optuna, plotly, Dash, Streamlit
+
+1. Aquire and Calculate potential list of features 
+2. Transform and create new features that will allow the ML algo to work well
+2. Analyze those features and their predictive power, feature selection
+3. Model Selection and Hyperpareamter optimization
+4. Analyze the models to evaluate overfitting and feature weighting over time
+5. Create a set of forecasts and confidence intervals
+
+
+Analysis Market
+-----------------
+
+Objective: Evaluate Market Conditions & Internals of the S&P 500 and its subsectors
+
+1. Plot and analyze the VIX term structure over time
+2. Calculate Market Internals for the S&P 500 and its subsectors
+3. Look at multiple market risk premiums (10-2 year bond spread, High beta vs low beta, etc...)
+4. Compute statisics about the characteristics of the S&P500
+
+
+
+Application
+------------
+
+Create an applicaiton that runs on the browser 
+Create an application the runs online and on your phone
+6. create a convienient dashboard
+7. Save / load models, data, from a database
+8. Create a remote web app, and do many calculations at once
+
+
+Goals
+1. Read over and understand the entirety of the Darts library (Modeling)
+2. Read over and understand sklearns feature selection tools (Feature selection)
+3. Read over and understand Optuna (Hyperparameter tuning)
+4. Create a plan organize your goals around each of 1-3
+
+
+

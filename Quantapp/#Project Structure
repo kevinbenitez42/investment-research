@@ -1,0 +1,21 @@
+data/macro_data_client.py:
+* Primary macro and FRED-style financial data client
+
+data/market_data_client.py:
+* ETF, index, and broader market dataset access
+
+data/company_data_client.py:
+* Company-level fundamentals and metadata access
+
+data/gics_data_client.py:
+* GICS structure, company classification, and aggregated sector or industry analysis
+
+visualization/plotter.py:
+* Receives prepared data series and renders them using specific chart types
+
+analytics/compute.py:
+* Receives prepared data and computes metrics, rolling statistics, and related transforms
+
+models/model.py:
+* Basic forecasting model helper
+

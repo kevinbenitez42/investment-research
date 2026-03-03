@@ -1,0 +1,2 @@
+"""Quantapp package."""
+

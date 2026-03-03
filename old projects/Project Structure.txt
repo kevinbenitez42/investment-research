@@ -1,0 +1,15 @@
+1. Volatility Models
+
+Time Frames = 10, 21, 50, 200
+
+Calculate Standard and Downside deviation for multiple time frames and Compare them
+Calculate closed models for multiple time frames and Compare them
+Fit and Calculate Garch models and (1,1) for multiple time frames and Compare them
+Fit and Calculate HAR - RV MODELS for multiple time frames and Compare them
+
+Evaluate the other moments and plot historic PDE for the Market, arch has skew and kurtosis forecasting
+Import historic VIX futures data and evaluate Term Structure over time
+
+
+2. Deep learning / Price forecasting
+3. Market Analysis / Futures Analysis
