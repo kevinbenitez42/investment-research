@@ -1,10 +1,9 @@
 """Analytics and computation helpers."""
 
-from Quantapp.analytics.compute import Algorithm
-from Quantapp.analytics.compute import Helper
-from Quantapp.analytics.compute import Models
-from Quantapp.analytics.compute import Rolling
-from Quantapp.analytics.compute import SequenceGenerator
+from .algorithm import Algorithm
+from .helper import Helper
+from .models import Models
+from .rolling import Rolling
+from .sequence_generator import SequenceGenerator
 
 __all__ = ["Helper", "Rolling", "SequenceGenerator", "Algorithm", "Models"]
-
