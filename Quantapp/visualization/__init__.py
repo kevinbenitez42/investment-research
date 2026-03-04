@@ -2,6 +2,7 @@
 
 from .bar_chart_plotter import BarChartPlotter
 from .candlestick_plotter import CandleStickPlotter
+from .figure_helpers import add_sigma_reference_lines
 from .heatmap_plotter import HeatmapPlotter
 from .line_chart_plotter import LineChartPlotter
 from .pie_chart_plotter import PieChartPlotter
@@ -14,4 +15,5 @@ __all__ = [
     "PieChartPlotter",
     "BarChartPlotter",
     "HeatmapPlotter",
+    "add_sigma_reference_lines",
 ]
