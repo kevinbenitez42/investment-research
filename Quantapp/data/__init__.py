@@ -1,6 +1,11 @@
 """Data access clients for financial research workflows."""
 
 from Quantapp.data.company_data_client import CompanyDataClient
+from Quantapp.data.benchmark_utils import (
+    align_series_to_common_index,
+    load_benchmark_data,
+    normalize_benchmark_tickers,
+)
 from Quantapp.data.gics_data_client import GICSDataClient
 from Quantapp.data.macro_data_client import MacroDataClient
 from Quantapp.data.market_data_client import MarketDataClient
@@ -10,5 +15,7 @@ __all__ = [
     "MarketDataClient",
     "CompanyDataClient",
     "GICSDataClient",
+    "normalize_benchmark_tickers",
+    "load_benchmark_data",
+    "align_series_to_common_index",
 ]
-

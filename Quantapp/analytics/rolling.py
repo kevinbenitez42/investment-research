@@ -13,12 +13,25 @@ import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller, coint
 
 from .algorithm import Algorithm
+from .cross_section_stats import CrossSectionStats
+from .feature_engineering import FeatureEngineering
+from .momentum_analytics import MomentumAnalytics
+from .risk_distribution_analytics import RiskDistributionAnalytics
+from .risk_relative_analytics import RiskRelativeAnalytics
+from .signal_labels import SignalLabels
+from .time_features import TimeFeatures
 
-class Rolling:
+class TimeSeriesAnalytics:
     
     def __init__(self):
-        pass
         self.algorithm = Algorithm()
+        self.time_features = TimeFeatures()
+        self.feature_engineering = FeatureEngineering()
+        self.cross_section_stats = CrossSectionStats()
+        self.momentum_analytics = MomentumAnalytics()
+        self.risk_distribution_analytics = RiskDistributionAnalytics()
+        self.risk_relative_analytics = RiskRelativeAnalytics()
+        self.signal_labels = SignalLabels()
         
     def compute_holiday_features(self, df, country='US'):
         """
@@ -202,6 +215,32 @@ class Rolling:
         moving_averages['original'] = series
         
         return moving_averages
+
+    def compute_optimal_momentum_window(self, close_series, windows):
+        """
+        Compute rolling Sharpe values for each window and the optimal window by date.
+
+        Parameters:
+            close_series (pd.Series): Price series (typically close prices).
+            windows (iterable): Window sizes to evaluate.
+
+        Returns:
+            pd.DataFrame: Rolling Sharpe columns keyed by window plus `Optimal_Window`.
+        """
+        if not isinstance(close_series, pd.Series):
+            raise TypeError("close_series must be a pandas Series.")
+
+        returns = close_series.pct_change()
+        sharpe_df = pd.DataFrame(index=close_series.index)
+
+        for w in windows:
+            mean_return = returns.rolling(window=w).mean()
+            std_return = returns.rolling(window=w).std()
+            sharpe_df[w] = mean_return / (std_return + 1e-8)
+
+        sharpe_df = sharpe_df.dropna(how="all")
+        sharpe_df["Optimal_Window"] = sharpe_df.idxmax(axis=1).astype(float)
+        return sharpe_df
     
     def compute_volatility(self, df, windows=[21, 50, 200], method='close-to-close'):
         """
@@ -746,113 +785,6 @@ class Rolling:
 
         return pd.concat(output, axis=1)
 
-
-        
-    '''
-    def risk_adjusted_returns(self, df, windows, ratio_type='sharpe', threshold=0.0):
-        """
-        Calculate risk-adjusted returns for a given price series using Sharpe, Sortino, Omega, Calmar, or Sterling ratios
-        over multiple time frames. Internally, this converts price data into returns.
-
-        Parameters:
-        - data (pd.Series): The input time series of prices.
-        - windows (list of int): List of time frames (window sizes) for calculating risk-adjusted returns.
-        - ratio_type (str): One of {'sortino', 'sharpe', 'omega', 'calmar', 'sterling'}.
-        - threshold (float): Return threshold used for the omega ratio (default 0.0).
-
-        Returns:
-        - pd.DataFrame: DataFrame with risk-adjusted returns for each window size.
-        """
-
-        if not isinstance(windows, list):
-            raise ValueError("windows should be a list of integers representing time frames.")
-
-        returns = df.pct_change().dropna()
-        risk_adjusted_returns_list = []
-
-        for window in windows:
-            average_return = returns.rolling(window=window).mean()
-
-            if ratio_type == 'sortino':
-                downside_deviation = returns.where(returns < 0, 0).rolling(window=window).apply(
-                    lambda x: np.sqrt((x ** 2).mean()), raw=True
-                )
-                risk_adjusted_return = average_return / downside_deviation
-
-            elif ratio_type == 'sharpe':
-                standard_deviation = returns.rolling(window=window).std()
-                risk_adjusted_return = average_return / standard_deviation
-                display(risk_adjusted_return)
-                abort()
-            elif ratio_type == 'omega':
-                def _omega_ratio(x):
-                    x_series = pd.Series(x).dropna()
-                    if x_series.empty:
-                        return np.nan
-                    excess = x_series - threshold
-                    gains = excess[excess > 0].sum()
-                    losses = -excess[excess < 0].sum()
-                    if losses == 0:
-                        return np.nan
-                    return gains / losses
-
-                risk_adjusted_return = returns.rolling(window=window).apply(_omega_ratio, raw=False)
-
-            elif ratio_type == 'calmar':
-                def _calmar_ratio(x):
-                    series = pd.Series(x).dropna()
-                    if series.empty:
-                        return np.nan
-                    growth = (1 + series).cumprod()
-                    peak = growth.cummax()
-                    drawdowns = growth / peak - 1
-                    max_drawdown = drawdowns.min()
-                    if pd.isna(max_drawdown) or max_drawdown >= 0:
-                        return np.nan
-                    total_return = growth.iloc[-1] - 1
-                    periods = len(series)
-                    if periods == 0:
-                        return np.nan
-                    annualized_return = (1 + total_return) ** (252 / periods) - 1
-                    return annualized_return / abs(max_drawdown) if abs(max_drawdown) > 0 else np.nan
-
-                risk_adjusted_return = returns.rolling(window=window).apply(_calmar_ratio, raw=False)
-
-            elif ratio_type == 'sterling':
-                def _sterling_ratio(x):
-                    series = pd.Series(x).dropna()
-                    if series.empty:
-                        return np.nan
-                    growth = (1 + series).cumprod()
-                    peak = growth.cummax()
-                    drawdowns = growth / peak - 1
-                    neg_drawdowns = drawdowns[drawdowns < 0]
-                    if neg_drawdowns.empty:
-                        return np.nan
-                    top_drawdowns = neg_drawdowns.nsmallest(3)
-                    avg_drawdown = np.abs(top_drawdowns).mean()
-                    if pd.isna(avg_drawdown) or avg_drawdown == 0:
-                        return np.nan
-                    total_return = growth.iloc[-1] - 1
-                    periods = len(series)
-                    if periods == 0:
-                        return np.nan
-                    annualized_return = (1 + total_return) ** (252 / periods) - 1
-                    return annualized_return / avg_drawdown
-
-                risk_adjusted_return = returns.rolling(window=window).apply(_sterling_ratio, raw=False)
-
-            else:
-                raise ValueError("Invalid ratio_type. Choose 'sortino', 'sharpe', 'omega', 'calmar', or 'sterling'.")
-
-            risk_adjusted_return = risk_adjusted_return.rename(f'{ratio_type}_ratio_{window}')
-            risk_adjusted_returns_list.append(risk_adjusted_return)
-
-        risk_adjusted_returns_df = pd.concat(risk_adjusted_returns_list, axis=1)
-
-        return risk_adjusted_returns_df
-    '''
-
     def calculate_percentage_drop(self, ticker, n=14):
         """
         Calculate the percentage drop from the highest peak in a rolling window.
@@ -1289,3 +1221,169 @@ class Rolling:
                 p_values.append(1.0)  # Use 1.0 as default p-value when test fails
         
         return correlation_pairs, p_values
+
+    # Delegated non-rolling components (latest definitions intentionally override earlier legacy bodies)
+    def compute_holiday_features(self, df, country='US'):
+        return self.time_features.compute_holiday_features(df, country=country)
+
+    def compute_seasonal_decompositions(self, df, seasonal_periods=[5, 21, 63, 125, 253]):
+        return self.time_features.compute_seasonal_decompositions(df, seasonal_periods=seasonal_periods)
+
+    def compute_pairwise(self, df, operations=['differences', 'products', 'sums', 'ratios']):
+        return self.feature_engineering.compute_pairwise(df, operations=operations)
+
+    def compute_lags(self, df, lags=range(5, 200), steps=1):
+        return self.feature_engineering.compute_lags(df, lags=lags, steps=steps)
+
+    def compute_non_linear(
+        self,
+        df,
+        transformations=['polynomial'],
+        degrees=range(2, 3),
+        roots=[2, 3],
+        logs=True,
+        exponentials=True,
+    ):
+        return self.feature_engineering.compute_non_linear(
+            df,
+            transformations=transformations,
+            degrees=degrees,
+            roots=roots,
+            logs=logs,
+            exponentials=exponentials,
+        )
+
+    def calculate_differences(self, df):
+        return self.feature_engineering.calculate_differences(df)
+
+    def compute_average_return(self, close_series, window, percent=True):
+        return self.momentum_analytics.compute_average_return(close_series, window=window, percent=percent)
+
+    def compute_momentum_diff(self, close_series, short_window, long_window):
+        return self.momentum_analytics.compute_momentum_diff(
+            close_series,
+            short_window=short_window,
+            long_window=long_window,
+        )
+
+    def compute_momentum_zscore(
+        self,
+        close_series,
+        short_window,
+        long_window,
+        normalizer_window=None,
+        ddof=0,
+    ):
+        return self.momentum_analytics.compute_momentum_zscore(
+            close_series=close_series,
+            short_window=short_window,
+            long_window=long_window,
+            normalizer_window=normalizer_window,
+            ddof=ddof,
+        )
+
+    def compute_momentum_zscore_map(self, close_series, window_pairs, normalizer_window=None, ddof=0):
+        return self.momentum_analytics.compute_momentum_zscore_map(
+            close_series=close_series,
+            window_pairs=window_pairs,
+            normalizer_window=normalizer_window,
+            ddof=ddof,
+        )
+
+    def compute_asset_ratio_maps(self, asset_close, time_frame_map):
+        return self.risk_relative_analytics.compute_asset_ratio_maps(
+            analytics=self,
+            asset_close=asset_close,
+            time_frame_map=time_frame_map,
+        )
+
+    def compute_ratio_spread_map(self, left_map, right_map):
+        return self.risk_relative_analytics.compute_ratio_spread_map(left_map, right_map)
+
+    def compute_benchmark_metrics(self, benchmark_data, asset_close, asset_sharpe_map, time_frame_map):
+        return self.risk_relative_analytics.compute_benchmark_metrics(
+            analytics=self,
+            benchmark_data=benchmark_data,
+            asset_close=asset_close,
+            asset_sharpe_map=asset_sharpe_map,
+            time_frame_map=time_frame_map,
+        )
+
+    def build_sharpe_sortino_term_config_map(self, asset_sharpe_map, asset_sortino_map, time_frame_map):
+        return self.risk_relative_analytics.build_term_config_map(
+            asset_sharpe_map=asset_sharpe_map,
+            asset_sortino_map=asset_sortino_map,
+            time_frame_map=time_frame_map,
+        )
+
+    def build_sharpe_sortino_context(self, asset_close, time_frame_map, benchmark_data=None):
+        return self.risk_relative_analytics.build_sharpe_sortino_context(
+            analytics=self,
+            asset_close=asset_close,
+            time_frame_map=time_frame_map,
+            benchmark_data=benchmark_data,
+        )
+
+    def build_benchmark_plot_payload(self, asset_sharpe_map, benchmark_metrics, spread_plot_data, time_frame_map):
+        return self.risk_relative_analytics.build_benchmark_plot_payload(
+            asset_sharpe_map=asset_sharpe_map,
+            benchmark_metrics=benchmark_metrics,
+            spread_plot_data=spread_plot_data,
+            time_frame_map=time_frame_map,
+        )
+
+    def build_risk_distribution_context(self, close_series, windows, default_window=None):
+        return self.risk_distribution_analytics.build_risk_distribution_context(
+            close_series=close_series,
+            windows=windows,
+            default_window=default_window,
+        )
+
+    def build_momentum_window_diagnostics_context(
+        self,
+        close_series,
+        window_sizes,
+        highlight_windows=(7, 21, 50, 200),
+        surface_years=10,
+    ):
+        return self.momentum_analytics.build_momentum_window_diagnostics_context(
+            analytics=self,
+            close_series=close_series,
+            window_sizes=window_sizes,
+            highlight_windows=highlight_windows,
+            surface_years=surface_years,
+        )
+
+    def z_score(self, time_series_data):
+        return self.signal_labels.z_score(time_series_data)
+
+    def categorize_z_score(self, z):
+        return self.signal_labels.categorize_z_score(z)
+
+    def create_sortino_negative_indicators(self, sortino_diff_50, sortino_diff_200):
+        return self.signal_labels.create_sortino_negative_indicators(sortino_diff_50, sortino_diff_200)
+
+    def create_sortino_std_deviation_table(self, rolling_sortino_ratio):
+        return self.signal_labels.create_sortino_std_deviation_table(rolling_sortino_ratio)
+
+    def create_price_std_deviation_table(self, price_data, window_sizes=[21, 50, 200]):
+        return self.signal_labels.create_price_std_deviation_table(price_data, window_sizes=window_sizes)
+
+    def filter_assets_by_positive_spread_std(self, asset_spreads):
+        return self.signal_labels.filter_assets_by_positive_spread_std(asset_spreads)
+
+    def filter_assets_below_negative_std(self, asset_spreads):
+        return self.signal_labels.filter_assets_below_negative_std(asset_spreads)
+
+    def pairwise_spreads(self, etf_dataframes, window=20):
+        return self.cross_section_stats.pairwise_spreads(etf_dataframes, window=window)
+
+    def get_sorted_correlations(self, corr_matrix):
+        return self.cross_section_stats.get_sorted_correlations(corr_matrix)
+
+    def get_cointegration_pvals(self, df, correlation_pairs):
+        return self.cross_section_stats.get_cointegration_pvals(df, correlation_pairs)
+
+
+# Backward-compatible alias for existing notebook and package imports.
+Rolling = TimeSeriesAnalytics
