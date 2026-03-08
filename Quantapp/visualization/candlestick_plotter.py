@@ -43,7 +43,7 @@ class CandleStickPlotter:
         ticker_data = ticker_data[ticker_data.index.dayofweek < 5]
         holidays = pd.to_datetime(['2023-01-01', '2023-12-25'])  # Add more holidays as needed
         ticker_data = ticker_data[~ticker_data.index.isin(holidays)]
-        ticker_data = rolling.calculate_percentage_drop(ticker_data, n=drop_window)
+        ticker_data = rolling.calculate_percentage_drop(ticker_data, windows=drop_window)
         mean_drop = ticker_data['PercentageDrop'].mean()
         std_drop = ticker_data['PercentageDrop'].std()
     

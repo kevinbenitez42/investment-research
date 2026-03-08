@@ -35,8 +35,135 @@ from .figure_helpers import (
 rolling = Rolling()
 
 class LineChartPlotter:
+    HEADER_TOP_MARGIN = 150
+    HEADER_TITLE_Y = 0.97
+    HEADER_MENU_Y = 1.08
+
     def __init__(self):
         pass
+
+    @classmethod
+    def _header_margin(cls, top=None):
+        return dict(t=cls.HEADER_TOP_MARGIN if top is None else int(top))
+
+    @classmethod
+    def _header_title(cls, text):
+        return dict(
+            text=str(text),
+            x=0.5,
+            xanchor="center",
+            y=cls.HEADER_TITLE_Y,
+            yanchor="top",
+        )
+
+    @classmethod
+    def _dropdown_menu(
+        cls,
+        *,
+        buttons,
+        x,
+        active=None,
+        y=None,
+        direction="down",
+        showactive=True,
+        xanchor="left",
+        yanchor="top",
+        **overrides,
+    ):
+        menu = dict(
+            type="dropdown",
+            buttons=buttons,
+            direction=direction,
+            showactive=showactive,
+            x=x,
+            xanchor=xanchor,
+            y=cls.HEADER_MENU_Y if y is None else y,
+            yanchor=yanchor,
+        )
+        if active is not None:
+            menu["active"] = active
+        menu.update(overrides)
+        return menu
+
+    @staticmethod
+    def _coerce_positive_int(value):
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced > 0 else None
+
+    @classmethod
+    def _preferred_numeric_window(cls, options, preferred=200):
+        normalized = []
+        seen = set()
+        for option in options:
+            coerced = cls._coerce_positive_int(option)
+            if coerced is None or coerced in seen:
+                continue
+            normalized.append(coerced)
+            seen.add(coerced)
+
+        if not normalized:
+            return None
+        if preferred in seen:
+            return preferred
+        return max(normalized)
+
+    @classmethod
+    def _window_value_from_label(cls, label, config=None):
+        if isinstance(config, Mapping):
+            config_window = cls._coerce_positive_int(config.get("time_frame"))
+            if config_window is not None:
+                return config_window
+
+        digits = "".join(ch if ch.isdigit() else " " for ch in str(label)).split()
+        if not digits:
+            return None
+        return cls._coerce_positive_int(digits[0])
+
+    @classmethod
+    def _preferred_window_label(cls, label_map, preferred=200):
+        labels = list(label_map.keys())
+        if not labels:
+            return None
+
+        exact_label = f"{preferred}-day"
+        if exact_label in label_map:
+            return exact_label
+
+        for label, config in label_map.items():
+            if cls._window_value_from_label(label, config) == preferred:
+                return label
+
+        return max(
+            labels,
+            key=lambda label: cls._window_value_from_label(label, label_map.get(label)) or -1,
+        )
+
+    @classmethod
+    def _preferred_term_key(cls, time_frame_map, term_options=None, preferred=200):
+        if term_options is None:
+            candidates = [term for term in time_frame_map.keys()]
+        else:
+            allowed = set(term_options)
+            candidates = [term for term in time_frame_map.keys() if term in allowed]
+            if not candidates:
+                candidates = list(term_options)
+
+        if not candidates:
+            return None
+        if "long" in candidates:
+            return "long"
+
+        for term in candidates:
+            if cls._coerce_positive_int(time_frame_map.get(term)) == preferred:
+                return term
+
+        return max(
+            candidates,
+            key=lambda term: cls._coerce_positive_int(time_frame_map.get(term)) or -1,
+        )
     
     def plot_series(self, data, title):
         fig = go.Figure()
@@ -76,7 +203,7 @@ class LineChartPlotter:
 
         labels = list(prepared_data.keys())
         if default_label not in prepared_data:
-            default_label = labels[0]
+            default_label = self._preferred_window_label(prepared_data) or labels[0]
 
         fig = make_subplots(rows=1, cols=1)
         for label in labels:
@@ -153,7 +280,7 @@ class LineChartPlotter:
                     method="update",
                     args=[
                         {"visible": visibility},
-                        {"title": f"{ticker_label} Momentum Z-Score {label}"},
+                        {"title": self._header_title(f"{ticker_label} Momentum Z-Score {label}")},
                     ],
                 )
             )
@@ -165,27 +292,20 @@ class LineChartPlotter:
 
         fig.update_layout(
             updatemenus=[
-                dict(
-                    type="dropdown",
-                    showactive=True,
+                self._dropdown_menu(
                     buttons=buttons_window,
                     x=0.10,
-                    y=1.15,
-                    xanchor="left",
                     direction="down",
                 ),
-                dict(
-                    type="dropdown",
-                    showactive=True,
+                self._dropdown_menu(
                     buttons=buttons_time,
                     x=0.33,
-                    y=1.15,
-                    xanchor="left",
                     direction="down",
                 ),
             ],
             height=600,
-            title=f"{ticker_label} Momentum Z-Score {default_label}",
+            margin=self._header_margin(),
+            title=self._header_title(f"{ticker_label} Momentum Z-Score {default_label}"),
             template="plotly_white",
             yaxis_title="Z-Score",
             xaxis=dict(range=[default_start, global_end]),
@@ -201,7 +321,7 @@ class LineChartPlotter:
 
         term_labels = list(term_config_map.keys())
         if default_label not in term_config_map:
-            default_label = term_labels[0]
+            default_label = self._preferred_window_label(term_config_map) or term_labels[0]
 
         fig = make_subplots(
             rows=2,
@@ -363,7 +483,7 @@ class LineChartPlotter:
                     method="update",
                     args=[
                         {"visible": visibility},
-                        {"title": {"text": f"Sharpe & Sortino Analysis for {ticker_label} ({term_label})"}},
+                        {"title": self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({term_label})")},
                     ],
                 )
             )
@@ -371,20 +491,16 @@ class LineChartPlotter:
         fig.update_layout(
             template="plotly_white",
             height=900,
+            margin=self._header_margin(),
             legend=dict(x=0.01, y=0.99),
             xaxis2_title="Date",
             yaxis_title="Ratio Value",
             yaxis2_title="Spread (z-score)",
-            title=dict(text=f"Sharpe & Sortino Analysis for {ticker_label} ({default_label})", x=0.5),
+            title=self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({default_label})"),
             updatemenus=[
-                dict(
+                self._dropdown_menu(
                     buttons=buttons,
-                    direction="down",
                     x=0.01,
-                    y=1.12,
-                    xanchor="left",
-                    yanchor="top",
-                    showactive=True,
                     active=term_labels.index(default_label),
                 )
             ],
@@ -411,7 +527,8 @@ class LineChartPlotter:
         if not term_order:
             raise ValueError("No overlapping term keys between summary_zscore_map and time_frame_map.")
 
-        default_term = default_term if default_term in term_order else term_order[0]
+        if default_term not in term_order:
+            default_term = self._preferred_term_key(time_frame_map, term_order) or term_order[0]
         benchmark_order = []
         for term in term_order:
             for symbol in summary_zscore_map.get(term, {}).keys():
@@ -481,7 +598,9 @@ class LineChartPlotter:
                 visibility[trace_idx] = True
 
             layout_updates = {
-                "title": f"{ticker_label} {term.title()} Sharpe Spread Z-Scores vs Benchmarks ({time_frame_map[term]}-Day)",
+                "title": self._header_title(
+                    f"{ticker_label} {term.title()} Sharpe Spread Z-Scores vs Benchmarks ({time_frame_map[term]}-Day)"
+                ),
                 "yaxis": {"title": "Sharpe Spread Z-Score"},
             }
             if term_ranges.get(term) is not None:
@@ -500,35 +619,26 @@ class LineChartPlotter:
             global_start = min(date_range[0] for date_range in available_ranges)
             global_end = max(date_range[1] for date_range in available_ranges)
             fig.update_xaxes(range=term_ranges[default_term] or [global_start, global_end])
-            time_range_menu = dict(
-                type="dropdown",
-                direction="down",
+            time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(global_start, global_end),
-                showactive=True,
                 x=0.22,
-                xanchor="left",
-                y=1.15,
-                yanchor="top",
             )
         else:
             time_range_menu = None
 
         fig.update_yaxes(title_text="Sharpe Spread Z-Score", row=1, col=1)
         fig.update_layout(
-            title=f"{ticker_label} {default_term.title()} Sharpe Spread Z-Scores vs Benchmarks ({time_frame_map[default_term]}-Day)",
+            title=self._header_title(
+                f"{ticker_label} {default_term.title()} Sharpe Spread Z-Scores vs Benchmarks ({time_frame_map[default_term]}-Day)"
+            ),
             height=650,
+            margin=self._header_margin(),
             template=template,
             showlegend=True,
             updatemenus=[
-                dict(
-                    type="dropdown",
-                    direction="down",
+                self._dropdown_menu(
                     buttons=timeframe_buttons,
-                    showactive=True,
                     x=0.0,
-                    xanchor="left",
-                    y=1.15,
-                    yanchor="top",
                 )
             ]
             + ([time_range_menu] if time_range_menu is not None else []),
@@ -556,7 +666,8 @@ class LineChartPlotter:
             raise ValueError("time_frame_map must be a non-empty mapping.")
 
         term_order = list(time_frame_map.keys())
-        default_term = default_term if default_term in term_order else term_order[0]
+        if default_term not in term_order:
+            default_term = self._preferred_term_key(time_frame_map, term_order) or term_order[0]
         default_benchmark = default_benchmark if default_benchmark in benchmark_order else benchmark_order[0]
 
         detail_fig = make_subplots(
@@ -680,7 +791,11 @@ class LineChartPlotter:
                     method="update",
                     args=[
                         {"visible": visibility},
-                        {"title": f"{ticker_label} vs {symbol} Benchmark Z-Score Detail [{term.title()} {time_frame_map[term]}-Day]"},
+                        {
+                            "title": self._header_title(
+                                f"{ticker_label} vs {symbol} Benchmark Z-Score Detail [{term.title()} {time_frame_map[term]}-Day]"
+                            )
+                        },
                     ],
                 )
             )
@@ -694,33 +809,24 @@ class LineChartPlotter:
         if detail_start is not None and detail_end is not None:
             detail_default_start = max(detail_start, detail_end - pd.DateOffset(years=3))
             detail_fig.update_xaxes(range=[detail_default_start, detail_end])
-            time_range_menu = dict(
-                type="dropdown",
-                direction="down",
+            time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(detail_start, detail_end, axis_count=3),
-                showactive=True,
                 x=0.18,
-                xanchor="left",
-                y=1.15,
-                yanchor="top",
             )
         else:
             time_range_menu = None
 
         detail_fig.update_layout(
-            title=f"{ticker_label} vs {default_benchmark} Benchmark Z-Score Detail [{default_term.title()} {time_frame_map[default_term]}-Day]",
+            title=self._header_title(
+                f"{ticker_label} vs {default_benchmark} Benchmark Z-Score Detail [{default_term.title()} {time_frame_map[default_term]}-Day]"
+            ),
             height=1200,
+            margin=self._header_margin(),
             template=template,
             updatemenus=[
-                dict(
-                    type="dropdown",
-                    direction="down",
+                self._dropdown_menu(
                     buttons=buttons,
-                    showactive=True,
                     x=0.0,
-                    xanchor="left",
-                    y=1.15,
-                    yanchor="top",
                 )
             ]
             + ([time_range_menu] if time_range_menu is not None else []),
@@ -754,7 +860,7 @@ class LineChartPlotter:
             raise ValueError("No valid window options available for plotting.")
 
         if default_window not in window_options:
-            default_window = window_options[0]
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
 
         fig = make_subplots(
             rows=4,
@@ -870,7 +976,7 @@ class LineChartPlotter:
                     method="update",
                     args=[
                         {"visible": visibility},
-                        {"title": f"{ticker_label} Rolling Risk Metrics Z-Scores ({window}-Day Window)"},
+                        {"title": self._header_title(f"{ticker_label} Rolling Risk Metrics Z-Scores ({window}-Day Window)")},
                     ],
                 )
             )
@@ -882,19 +988,14 @@ class LineChartPlotter:
 
         fig.update_layout(
             updatemenus=[
-                dict(
-                    type="dropdown",
-                    direction="down",
+                self._dropdown_menu(
                     buttons=buttons,
-                    showactive=True,
                     x=0.1,
-                    xanchor="left",
-                    y=1.1,
-                    yanchor="top",
                 )
             ],
-            title=f"{ticker_label} Rolling Risk Metrics Z-Scores ({default_window}-Day Window)",
+            title=self._header_title(f"{ticker_label} Rolling Risk Metrics Z-Scores ({default_window}-Day Window)"),
             height=1500,
+            margin=self._header_margin(),
             template=template,
             showlegend=False,
         )
@@ -1236,7 +1337,7 @@ class LineChartPlotter:
         metric_windows_map = {
             metric_key: list(series_map.keys()) for metric_key, series_map in window_series_map.items()
         }
-        default_window = metric_windows_map[default_metric][0]
+        default_window = self._preferred_numeric_window(metric_windows_map[default_metric]) or metric_windows_map[default_metric][0]
 
         global_min = series.index.min()
         global_max = series.index.max()
@@ -1256,14 +1357,9 @@ class LineChartPlotter:
             dict(label="3 Years", method="relayout", args=[{"xaxis.range": clamp(3)}]),
             dict(label="1 Year", method="relayout", args=[{"xaxis.range": clamp(1)}]),
         ]
-        timeframe_menu = dict(
+        timeframe_menu = self._dropdown_menu(
             buttons=timeframe_buttons,
-            direction="down",
-            showactive=True,
             x=0.22,
-            xanchor="left",
-            y=1.15,
-            yanchor="top",
             active=0,
         )
 
@@ -1506,7 +1602,7 @@ class LineChartPlotter:
             return {
                 "shapes": shapes,
                 "annotations": annotations,
-                "title": title_text,
+                "title": self._header_title(title_text),
                 "xaxis_range": [default_start, latest],
                 "yaxis_title": yaxis_title,
             }
@@ -1558,14 +1654,9 @@ class LineChartPlotter:
             active_index = 0
             if active_window in metric_windows:
                 active_index = metric_windows.index(active_window)
-            return dict(
+            return self._dropdown_menu(
                 buttons=buttons,
-                direction="down",
-                showactive=True,
                 x=0.01,
-                xanchor="left",
-                y=1.15,
-                yanchor="top",
                 active=active_index,
             )
 
@@ -1593,6 +1684,7 @@ class LineChartPlotter:
         defaults_layout = default_combo["layout"]
         fig.update_layout(
             height=1000,
+            margin=self._header_margin(),
             title=defaults_layout["title"],
             shapes=defaults_layout["shapes"],
             annotations=defaults_layout["annotations"],
@@ -1609,7 +1701,7 @@ class LineChartPlotter:
             metric_key_order = []
             for metric_key in available_metrics:
                 metric_windows = metric_windows_map[metric_key]
-                metric_default_window = metric_windows[0]
+                metric_default_window = self._preferred_numeric_window(metric_windows) or metric_windows[0]
                 combo = combination_data[(metric_key, metric_default_window)]
                 metric_buttons.append(
                     dict(
@@ -1629,14 +1721,9 @@ class LineChartPlotter:
                 )
                 metric_key_order.append(metric_key)
 
-            metric_menu_template = dict(
+            metric_menu_template = self._dropdown_menu(
                 buttons=metric_buttons,
-                direction="down",
-                showactive=True,
                 x=0.43,
-                xanchor="left",
-                y=1.15,
-                yanchor="top",
             )
 
             for idx, metric_key in enumerate(metric_key_order):

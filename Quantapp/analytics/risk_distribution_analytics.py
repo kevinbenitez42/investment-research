@@ -49,6 +49,14 @@ class RiskDistributionAnalytics:
             raise ValueError("No valid windows supplied.")
         return normalized
 
+    @staticmethod
+    def _select_default_window(window_options, default_window=None):
+        if default_window in window_options:
+            return default_window
+        if 200 in window_options:
+            return 200
+        return max(window_options)
+
     def build_risk_distribution_context(self, close_series, windows, default_window=None):
         """
         Build drawdown/skew/kurtosis/gini rolling metrics for each window.
@@ -66,8 +74,7 @@ class RiskDistributionAnalytics:
         """
         close = self._coerce_close_series(close_series)
         window_options = self._normalize_windows(windows)
-        if default_window not in window_options:
-            default_window = window_options[0]
+        default_window = self._select_default_window(window_options, default_window=default_window)
 
         daily_returns = close.pct_change().dropna()
         metrics_by_window = {

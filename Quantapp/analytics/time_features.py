@@ -10,6 +10,10 @@ from statsmodels.tsa.seasonal import STL
 class TimeFeatures:
     """Time-domain feature generation helpers."""
 
+    def holiday_features(self, df, country="US"):
+        """Alias for holiday feature generation without the legacy `compute_` prefix."""
+        return self.compute_holiday_features(df, country=country)
+
     def compute_holiday_features(self, df, country="US"):
         """
         Add holiday flags/ids and countdown features for each holiday type.
@@ -79,6 +83,10 @@ class TimeFeatures:
             holidays_df[f"days_until_{name}"] = countdown
 
         return holidays_df
+
+    def seasonal_decompositions(self, df, seasonal_periods=(5, 21, 63, 125, 253)):
+        """Alias for STL decomposition without the legacy `compute_` prefix."""
+        return self.compute_seasonal_decompositions(df, seasonal_periods=seasonal_periods)
 
     def compute_seasonal_decompositions(self, df, seasonal_periods=(5, 21, 63, 125, 253)):
         """

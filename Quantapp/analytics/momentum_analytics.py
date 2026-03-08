@@ -27,6 +27,10 @@ class MomentumAnalytics:
             raise ValueError("close_series is empty after dropping NaNs.")
         return series.sort_index()
 
+    def average_return(self, close_series, window: int, percent: bool = True) -> pd.Series:
+        """Alias for average-return computation without the legacy `compute_` prefix."""
+        return self.compute_average_return(close_series, window=window, percent=percent)
+
     def compute_average_return(self, close_series, window: int, percent: bool = True) -> pd.Series:
         """Compute rolling average return over `window` observations."""
         close = self._coerce_close_series(close_series)
@@ -36,11 +40,32 @@ class MomentumAnalytics:
             avg_return = avg_return * 100.0
         return avg_return
 
+    def momentum_diff(self, close_series, short_window: int, long_window: int) -> pd.Series:
+        """Alias for momentum spread computation without the legacy `compute_` prefix."""
+        return self.compute_momentum_diff(close_series, short_window=short_window, long_window=long_window)
+
     def compute_momentum_diff(self, close_series, short_window: int, long_window: int) -> pd.Series:
         """Compute momentum spread as short minus long rolling average returns."""
         avg_short = self.compute_average_return(close_series, short_window, percent=True)
         avg_long = self.compute_average_return(close_series, long_window, percent=True)
         return avg_short - avg_long
+
+    def momentum_zscore(
+        self,
+        close_series,
+        short_window: int,
+        long_window: int,
+        normalizer_window: int | None = None,
+        ddof: int = 0,
+    ) -> pd.Series:
+        """Alias for momentum z-score computation without the legacy `compute_` prefix."""
+        return self.compute_momentum_zscore(
+            close_series=close_series,
+            short_window=short_window,
+            long_window=long_window,
+            normalizer_window=normalizer_window,
+            ddof=ddof,
+        )
 
     def compute_momentum_zscore(
         self,
@@ -74,6 +99,21 @@ class MomentumAnalytics:
 
         return (momentum_diff - mean) / std
 
+    def momentum_zscore_map(
+        self,
+        close_series,
+        window_pairs: Mapping[str, tuple[int, int]],
+        normalizer_window: int | None = None,
+        ddof: int = 0,
+    ) -> dict[str, pd.Series]:
+        """Alias for momentum z-score map computation without the legacy `compute_` prefix."""
+        return self.compute_momentum_zscore_map(
+            close_series=close_series,
+            window_pairs=window_pairs,
+            normalizer_window=normalizer_window,
+            ddof=ddof,
+        )
+
     def compute_momentum_zscore_map(
         self,
         close_series,
@@ -98,6 +138,22 @@ class MomentumAnalytics:
                 ddof=ddof,
             )
         return zscore_data
+
+    def optimal_momentum_window(self, close_series, windows) -> pd.DataFrame:
+        """Compute rolling Sharpe values for each window and the optimal window by date."""
+        close = self._coerce_close_series(close_series)
+        returns = close.pct_change()
+        sharpe_df = pd.DataFrame(index=close.index)
+
+        for window in windows:
+            window = int(window)
+            mean_return = returns.rolling(window=window).mean()
+            std_return = returns.rolling(window=window).std()
+            sharpe_df[window] = mean_return / (std_return + 1e-8)
+
+        sharpe_df = sharpe_df.dropna(how="all")
+        sharpe_df["Optimal_Window"] = sharpe_df.idxmax(axis=1).astype(float)
+        return sharpe_df
 
     @staticmethod
     def _normalize_windows(window_sizes):
@@ -124,11 +180,11 @@ class MomentumAnalytics:
 
     def build_momentum_window_diagnostics_context(
         self,
-        analytics,
         close_series,
         window_sizes,
         highlight_windows=(7, 21, 50, 200),
         surface_years: int = 10,
+        analytics=None,
     ):
         """
         Build diagnostics context for rolling Sharpe windows and volatility.
@@ -159,7 +215,8 @@ class MomentumAnalytics:
         if surface_years <= 0:
             raise ValueError("surface_years must be a positive integer.")
 
-        sharpe_table = analytics.compute_optimal_momentum_window(close, window_sizes)
+        sharpe_source = analytics if analytics is not None else self
+        sharpe_table = sharpe_source.optimal_momentum_window(close, window_sizes)
         if sharpe_table.empty:
             raise ValueError("Unable to compute rolling Sharpe table for the provided inputs.")
 

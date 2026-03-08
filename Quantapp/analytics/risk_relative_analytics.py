@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 import pandas as pd
 
+from .rolling import _rolling_sortino_ratio_frame
 from .series_utils import calculate_zscore
 
 
@@ -50,6 +51,47 @@ class RiskRelativeAnalytics:
             return pd.Series(dtype=float)
         return ratio_df.iloc[:, 0]
 
+    @staticmethod
+    def _coerce_series_or_frame(data, argument_name: str):
+        if isinstance(data, (pd.Series, pd.DataFrame)):
+            if data.empty:
+                raise ValueError(f"{argument_name} is empty.")
+            return data.sort_index()
+        raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
+
+    @staticmethod
+    def _coerce_benchmark_series(benchmark_series) -> pd.Series:
+        if isinstance(benchmark_series, pd.Series):
+            series = benchmark_series
+        elif isinstance(benchmark_series, pd.DataFrame):
+            if benchmark_series.shape[1] != 1 and "Close" not in benchmark_series.columns:
+                raise ValueError("benchmark_series DataFrame must contain exactly one column or a 'Close' column.")
+            series = benchmark_series["Close"] if "Close" in benchmark_series.columns else benchmark_series.iloc[:, 0]
+        else:
+            raise TypeError("benchmark_series must be a pandas Series or DataFrame.")
+
+        series = series.dropna()
+        if series.empty:
+            raise ValueError("benchmark_series is empty after dropping NaNs.")
+        return series.sort_index()
+
+    @staticmethod
+    def _rolling_sortino_ratio(data, window: int, risk_free_rate: float = 0.0) -> pd.DataFrame:
+        return _rolling_sortino_ratio_frame(
+            data,
+            window=window,
+            risk_free_rate=risk_free_rate,
+        )
+
+    def asset_ratio_map(self, analytics, asset_close, time_frame_map, ratio_type: str) -> dict[str, pd.Series]:
+        """Alias for ratio-map construction without the legacy `compute_` prefix."""
+        return self.compute_asset_ratio_map(
+            analytics=analytics,
+            asset_close=asset_close,
+            time_frame_map=time_frame_map,
+            ratio_type=ratio_type,
+        )
+
     def compute_asset_ratio_map(self, analytics, asset_close, time_frame_map, ratio_type: str) -> dict[str, pd.Series]:
         """Compute one risk-adjusted ratio series per term/window."""
         close = self._coerce_close_series(asset_close, argument_name="asset_close")
@@ -64,6 +106,10 @@ class RiskRelativeAnalytics:
             )
             ratio_map[term] = self._extract_ratio_series(ratio_df, ratio_type=ratio_type, window=window)
         return ratio_map
+
+    def asset_ratio_maps(self, analytics, asset_close, time_frame_map):
+        """Alias for Sharpe/Sortino map construction without the legacy `compute_` prefix."""
+        return self.compute_asset_ratio_maps(analytics=analytics, asset_close=asset_close, time_frame_map=time_frame_map)
 
     def compute_asset_ratio_maps(self, analytics, asset_close, time_frame_map):
         """Compute Sharpe and Sortino maps keyed by term."""
@@ -82,9 +128,24 @@ class RiskRelativeAnalytics:
         return asset_sharpe_map, asset_sortino_map
 
     @staticmethod
+    def ratio_spread_map(left_map: Mapping[str, pd.Series], right_map: Mapping[str, pd.Series]) -> dict[str, pd.Series]:
+        """Alias for spread-map construction without the legacy `compute_` prefix."""
+        return RiskRelativeAnalytics.compute_ratio_spread_map(left_map, right_map)
+
+    @staticmethod
     def compute_ratio_spread_map(left_map: Mapping[str, pd.Series], right_map: Mapping[str, pd.Series]) -> dict[str, pd.Series]:
         """Compute left-right spread map using shared term keys."""
         return {term: left_map[term] - right_map[term] for term in left_map.keys() if term in right_map}
+
+    def benchmark_metrics(self, analytics, benchmark_data, asset_close, asset_sharpe_map, time_frame_map):
+        """Alias for benchmark-metric construction without the legacy `compute_` prefix."""
+        return self.compute_benchmark_metrics(
+            analytics=analytics,
+            benchmark_data=benchmark_data,
+            asset_close=asset_close,
+            asset_sharpe_map=asset_sharpe_map,
+            time_frame_map=time_frame_map,
+        )
 
     def compute_benchmark_metrics(self, analytics, benchmark_data, asset_close, asset_sharpe_map, time_frame_map):
         """Compute benchmark Sharpe, relative returns spread, and Sharpe spread by term."""
@@ -118,6 +179,38 @@ class RiskRelativeAnalytics:
                 }
 
         return metrics
+
+    def spread(self, asset_series, benchmark_series, time_frame, mode: str = "standard", risk_free_rate: float = 0.0):
+        """Compute benchmark-minus-asset spread for raw returns or rolling Sortino ratios."""
+        time_frame = int(time_frame)
+        if time_frame <= 0:
+            raise ValueError("time_frame must be a positive integer.")
+
+        asset_data = self._coerce_series_or_frame(asset_series, argument_name="asset_series")
+        benchmark = self._coerce_benchmark_series(benchmark_series)
+
+        if mode == "standard":
+            asset_metric = asset_data.pct_change(time_frame)
+            benchmark_metric = benchmark.pct_change(time_frame)
+        elif mode == "sortino":
+            asset_metric = self._rolling_sortino_ratio(asset_data, window=time_frame, risk_free_rate=risk_free_rate)
+            benchmark_metric = self._rolling_sortino_ratio(
+                benchmark,
+                window=time_frame,
+                risk_free_rate=risk_free_rate,
+            ).iloc[:, 0]
+        else:
+            raise ValueError("Invalid mode. Use 'standard' or 'sortino'.")
+
+        if isinstance(asset_metric, pd.Series):
+            asset_metric = asset_metric.to_frame(name=asset_metric.name or "asset")
+
+        spread_df = pd.DataFrame(index=asset_metric.index)
+        benchmark_metric = benchmark_metric.reindex(asset_metric.index)
+        for col in asset_metric.columns:
+            spread_df[f"Benchmark_minus_{col}"] = benchmark_metric - asset_metric[col]
+
+        return spread_df
 
     def build_term_config_map(self, asset_sharpe_map, asset_sortino_map, time_frame_map):
         """Build plotting config map keyed as '<window>-day'."""

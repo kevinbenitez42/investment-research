@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
 #import Quantapps Computation libarary
-from Quantapp.analytics import Rolling
+from Quantapp.analytics import CrossSectionStats, Rolling
 import pandas as pd
 import yfinance as yf
 from statsmodels.tsa.stattools import coint
@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from Quantapp.data.market_data_client import MarketDataClient
 
 rolling = Rolling()
+cross_section_stats = CrossSectionStats()
 
 class Plotter:
     def __init__(self):
@@ -562,7 +563,7 @@ class Plotter:
         """
         # Ensure the index is a DateTimeIndex
         
-        percentage_drop = rolling.calculate_percentage_drop(data, n=n)['PercentageDrop']
+        percentage_drop = rolling.calculate_percentage_drop(data, windows=n)['PercentageDrop']
      
         if not isinstance(data.index, pd.DatetimeIndex):
             data.index = pd.to_datetime(data.index)
@@ -795,7 +796,7 @@ class Plotter:
         ticker_data = ticker_data[ticker_data.index.dayofweek < 5]
         holidays = pd.to_datetime(['2023-01-01', '2023-12-25'])  # Add more holidays as needed
         ticker_data = ticker_data[~ticker_data.index.isin(holidays)]
-        ticker_data = rolling.calculate_percentage_drop(ticker_data, n=drop_window)
+        ticker_data = rolling.calculate_percentage_drop(ticker_data, windows=drop_window)
         mean_drop = ticker_data['PercentageDrop'].mean()
         std_drop = ticker_data['PercentageDrop'].std()
     
@@ -1934,11 +1935,11 @@ class Plotter:
         first_matrix = etf_dataframes_correlation_matrices[first_key]
 
         # Get sorted correlations
-        pair_names, pair_corrs = rolling.get_sorted_correlations(first_matrix)
+        pair_names, pair_corrs = cross_section_stats.get_sorted_correlations(first_matrix)
         pair_names = list(pair_names)  # Convert to list for reuse
 
         # Get cointegration p-values for the same pairs in same order
-        coint_pair_names, coint_p_values = rolling.get_cointegration_pvals(first_df, pair_names)
+        coint_pair_names, coint_p_values = cross_section_stats.get_cointegration_pvals(first_df, pair_names)
 
         # Convert p-values to -log10(p) for better visualization
         log_p_values = [-np.log10(p) if p > 0 else 15 for p in coint_p_values] if coint_p_values else []
@@ -2000,9 +2001,9 @@ class Plotter:
         for key in etf_dataframes_correlation_matrices.keys():
             matrix = etf_dataframes_correlation_matrices[key]
             df = etf_dataframes_monthly[key]
-            pair_names, pair_corrs = rolling.get_sorted_correlations(matrix)
+            pair_names, pair_corrs = cross_section_stats.get_sorted_correlations(matrix)
             pair_names_list = list(pair_names)
-            coint_pair_names, coint_p_values = rolling.get_cointegration_pvals(df, pair_names_list)
+            coint_pair_names, coint_p_values = cross_section_stats.get_cointegration_pvals(df, pair_names_list)
             log_p_values = [-np.log10(p) if p > 0 else 15 for p in coint_p_values] if coint_p_values else []
 
             buttons.append(

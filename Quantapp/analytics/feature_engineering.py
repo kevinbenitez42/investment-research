@@ -9,6 +9,10 @@ import pandas as pd
 class FeatureEngineering:
     """Column-wise and pairwise feature transformation helpers."""
 
+    def pairwise(self, df, operations=("differences", "products", "sums", "ratios")):
+        """Alias for pairwise feature generation without the legacy `compute_` prefix."""
+        return self.compute_pairwise(df, operations=operations)
+
     def compute_pairwise(self, df, operations=("differences", "products", "sums", "ratios")):
         """
         Compute pairwise operations for each unique combination of columns.
@@ -47,6 +51,10 @@ class FeatureEngineering:
 
         return pairwise_df.dropna(axis=1, how="all")
 
+    def lags(self, df, lags=range(5, 200), steps=1):
+        """Alias for lag generation without the legacy `compute_` prefix."""
+        return self.compute_lags(df, lags=lags, steps=steps)
+
     def compute_lags(self, df, lags=range(5, 200), steps=1):
         """Generate lagged features for each column and include the originals."""
         lagged_df = pd.DataFrame(index=df.index)
@@ -58,6 +66,25 @@ class FeatureEngineering:
                 lagged_df[f"{col}_lag_{lag}"] = series.shift(lag)
 
         return pd.concat([lagged_df, df], axis=1)
+
+    def non_linear(
+        self,
+        df,
+        transformations=("polynomial",),
+        degrees=range(2, 3),
+        roots=(2, 3),
+        logs=True,
+        exponentials=True,
+    ):
+        """Alias for nonlinear transforms without the legacy `compute_` prefix."""
+        return self.compute_non_linear(
+            df,
+            transformations=transformations,
+            degrees=degrees,
+            roots=roots,
+            logs=logs,
+            exponentials=exponentials,
+        )
 
     def compute_non_linear(
         self,

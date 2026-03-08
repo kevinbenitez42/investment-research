@@ -8,6 +8,29 @@ version = "0.1.0"
 description = "Investment research toolkit"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4",
+    "holidays",
+    "numpy",
+    "pandas",
+    "plotly",
+    "requests",
+    "scikit-learn",
+    "scipy",
+    "statsmodels",
+    "yfinance",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "ipykernel",
+    "ipython",
+]
+data = [
+    "investpy",
+    "nasdaq-data-link",
+    "pandas-datareader",
+]
 
 [tool.setuptools.packages.find]
 include = ["Quantapp*"]
