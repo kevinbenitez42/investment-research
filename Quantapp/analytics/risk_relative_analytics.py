@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import numpy as np
 import pandas as pd
 
 from .rolling import _rolling_sortino_ratio_frame
@@ -28,6 +29,21 @@ class RiskRelativeAnalytics:
         if close.empty:
             raise ValueError(f"{argument_name} is empty after dropping NaNs.")
         return close.sort_index()
+
+    @staticmethod
+    def _coerce_close_frame(data, argument_name: str = "asset_close") -> pd.DataFrame:
+        if isinstance(data, pd.Series):
+            name = data.name or "asset"
+            frame = data.to_frame(name=name)
+        elif isinstance(data, pd.DataFrame):
+            frame = data.copy()
+        else:
+            raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
+
+        frame = frame.dropna(how="all")
+        if frame.empty:
+            raise ValueError(f"{argument_name} is empty after dropping NaNs.")
+        return frame.sort_index()
 
     @staticmethod
     def _coerce_time_frame_map(time_frame_map: Mapping[str, int]) -> dict[str, int]:
@@ -74,6 +90,33 @@ class RiskRelativeAnalytics:
         if series.empty:
             raise ValueError("benchmark_series is empty after dropping NaNs.")
         return series.sort_index()
+
+    @staticmethod
+    def _rolling_sharpe_ratio_from_returns(returns, window: int, annualization_factor: int = 252):
+        """Compute rolling Sharpe ratios from precomputed returns."""
+        rolling_mean = returns.rolling(window).mean()
+        rolling_std = returns.rolling(window).std()
+        ratio = np.sqrt(annualization_factor) * rolling_mean / rolling_std
+        return ratio.where(rolling_std > 0).replace([np.inf, -np.inf], np.nan)
+
+    @staticmethod
+    def _latest_zscore_snapshot(metric_frame: pd.DataFrame) -> pd.Series:
+        """Return the latest cross-sectional snapshot from time-series z-scored metrics."""
+        if metric_frame.empty:
+            return pd.Series(dtype=float)
+        zscore_frame = metric_frame.apply(calculate_zscore)
+        if zscore_frame.empty:
+            return pd.Series(dtype=float)
+        return zscore_frame.iloc[-1].dropna().sort_values(ascending=False)
+
+    @classmethod
+    def _latest_spread_zscore_snapshot(cls, asset_metric_frame: pd.DataFrame, benchmark_metric: pd.Series) -> pd.Series:
+        """Return the latest z-score snapshot of the benchmark-minus-asset spread series."""
+        if asset_metric_frame.empty:
+            return pd.Series(dtype=float)
+        benchmark_aligned = benchmark_metric.reindex(asset_metric_frame.index)
+        spread_frame = asset_metric_frame.apply(lambda column: benchmark_aligned - column, axis=0)
+        return cls._latest_zscore_snapshot(spread_frame)
 
     @staticmethod
     def _rolling_sortino_ratio(data, window: int, risk_free_rate: float = 0.0) -> pd.DataFrame:
@@ -179,6 +222,81 @@ class RiskRelativeAnalytics:
                 }
 
         return metrics
+
+    def build_multi_asset_benchmark_snapshot(
+        self,
+        analytics,
+        asset_close,
+        benchmark_close,
+        time_frame_map,
+        sign_map=None,
+        annualization_factor: int = 252,
+    ):
+        """
+        Build latest cross-sectional Sharpe and benchmark-spread z-score snapshots for a multi-asset frame.
+
+        This mirrors the single-asset benchmark spread methodology used elsewhere:
+        compute rolling Sharpe series first, then z-score the benchmark-minus-asset spread series.
+        """
+        asset_frame = self._coerce_close_frame(asset_close, argument_name="asset_close")
+        benchmark_series = self._coerce_benchmark_series(benchmark_close)
+        tf_map = self._coerce_time_frame_map(time_frame_map)
+
+        common_index = asset_frame.index.intersection(benchmark_series.index)
+        asset_frame = asset_frame.reindex(common_index).dropna(how="all")
+        benchmark_series = benchmark_series.reindex(common_index).dropna()
+        if asset_frame.empty or benchmark_series.empty:
+            raise ValueError("asset_close and benchmark_close do not share a non-empty common index.")
+
+        sign_series = pd.Series(1.0, index=asset_frame.columns, dtype=float)
+        if sign_map is not None:
+            sign_series = pd.Series(sign_map, dtype=float).reindex(asset_frame.columns).fillna(1.0)
+
+        signed_returns = asset_frame.pct_change().mul(sign_series, axis=1)
+
+        payload = {
+            "unsigned_asset_latest_zscores": {},
+            "signed_asset_latest_zscores": {},
+            "unsigned_spread_latest_zscores": {},
+            "signed_spread_latest_zscores": {},
+            "signed_return_latest_zscores": {},
+        }
+
+        for term, window in tf_map.items():
+            unsigned_sharpe = analytics.risk_adjusted_returns(
+                asset_frame,
+                windows=[window],
+                ratio_type="sharpe",
+            )
+            if unsigned_sharpe.shape[1] == asset_frame.shape[1]:
+                unsigned_sharpe.columns = asset_frame.columns
+
+            benchmark_sharpe = analytics.risk_adjusted_returns(
+                benchmark_series,
+                windows=[window],
+                ratio_type="sharpe",
+            ).iloc[:, 0]
+
+            signed_sharpe = self._rolling_sharpe_ratio_from_returns(
+                signed_returns,
+                window=window,
+                annualization_factor=annualization_factor,
+            )
+            signed_return_frame = asset_frame.pct_change(window).mul(sign_series, axis=1)
+
+            payload["unsigned_asset_latest_zscores"][term] = self._latest_zscore_snapshot(unsigned_sharpe)
+            payload["signed_asset_latest_zscores"][term] = self._latest_zscore_snapshot(signed_sharpe)
+            payload["unsigned_spread_latest_zscores"][term] = self._latest_spread_zscore_snapshot(
+                unsigned_sharpe,
+                benchmark_sharpe,
+            )
+            payload["signed_spread_latest_zscores"][term] = self._latest_spread_zscore_snapshot(
+                signed_sharpe,
+                benchmark_sharpe,
+            )
+            payload["signed_return_latest_zscores"][term] = self._latest_zscore_snapshot(signed_return_frame)
+
+        return payload
 
     def spread(self, asset_series, benchmark_series, time_frame, mode: str = "standard", risk_free_rate: float = 0.0):
         """Compute benchmark-minus-asset spread for raw returns or rolling Sortino ratios."""
