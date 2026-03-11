@@ -1,4 +1,5 @@
 import os
+from io import StringIO
 
 import pandas as pd
 import requests
@@ -6,16 +7,38 @@ import yfinance as yf
 
 from Quantapp.data.company_data_client import CompanyDataClient
 
+
+def _project_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+
+
 class GICSDataClient:
     
     def __init__(self, client=None,save_path=None, debug=False):
         self.client = client
-        self.save_path = save_path if save_path is not None else os.getcwd()
+        self.save_path = os.path.abspath(save_path) if save_path is not None else _project_root()
         self.debug = debug
     
     def _log(self, message):
         if self.debug:
             print(message)
+
+    def _gics_structure_path(self):
+        candidates = [
+            os.path.join(self.save_path, 'gics_structure.csv'),
+            os.path.join(_project_root(), 'gics_structure.csv'),
+        ]
+
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+        os.makedirs(self.save_path, exist_ok=True)
+        self.get_latest_gics_structure()
+        return os.path.join(self.save_path, 'gics_structure.csv')
+
+    def _load_gics_table(self):
+        return pd.read_csv(self._gics_structure_path())
     
     def get_latest_gics_structure(self):
         url = "https://en.wikipedia.org/wiki/Global_Industry_Classification_Standard"
@@ -33,7 +56,7 @@ class GICSDataClient:
         html = response.text
 
         # Parse tables from HTML
-        tables = pd.read_html(html)
+        tables = pd.read_html(StringIO(html))
         gics_table = tables[0]  # the first table contains the GICS structure
 
         # Set column names for the GICS table
@@ -50,6 +73,7 @@ class GICSDataClient:
         gics_table = gics_table.dropna().reset_index(drop=True)
         
         # Save table to current directory as gics_structure.csv
+        os.makedirs(self.save_path, exist_ok=True)
         gics_table.to_csv(os.path.join(self.save_path, 'gics_structure.csv'), index=False)
         
         return gics_table
@@ -65,15 +89,18 @@ class GICSDataClient:
         sp500_response = requests.get(sp500_url, headers=headers)
         sp400_response = requests.get(sp400_url, headers=headers)
         sp600_response = requests.get(sp600_url, headers=headers)
+        sp500_response.raise_for_status()
+        sp400_response.raise_for_status()
+        sp600_response.raise_for_status()
         
         
         # Retrieve S&P 500 data KEEP THIS THIS SHIFT THIS SHIT ARROUND TOO MUCH
         #--------------------------------------------------------------------------------------------
         #sp500_table = pd.read_html(response.text)[0] 
         
-        sp500_table = pd.read_html(sp500_response.text)[0] 
-        sp400_table = pd.read_html(sp400_response.text)[0]
-        sp600_table = pd.read_html(sp600_response.text)[0]
+        sp500_table = pd.read_html(StringIO(sp500_response.text))[0] 
+        sp400_table = pd.read_html(StringIO(sp400_response.text))[0]
+        sp600_table = pd.read_html(StringIO(sp600_response.text))[0]
         
         #--------------------------------------------------------------------------------------------
         sp500_table = sp500_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
@@ -97,7 +124,7 @@ class GICSDataClient:
         combined_table['GICS Code'] = combined_table['Sub-Industry'].apply(lambda x: self.name_to_gics(x, level='Sub-Industry'))
         combined_table['GICS Code'] = combined_table['GICS Code'].astype('Int64')
         
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         
         #these are the unique GICS codes in the combined table
         all_gics_codes_combined_table = combined_table['GICS Code'].unique().tolist()
@@ -136,7 +163,7 @@ class GICSDataClient:
   
     # Convert GICS code to names (return dictionary with sector, industry group, industry, sub-industry)
     def gics_to_name(self, gics_code):
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         
         gics_code_str = str(gics_code)
         code_length = len(gics_code_str)
@@ -175,7 +202,7 @@ class GICSDataClient:
     
     # Convert GICS names to codes (return GICS code based on level: Sector, Industry Group, Industry, Sub-Industry)
     def name_to_gics(self, name, level='Sector'):
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         if level == 'Sector':
             row = gics_table[gics_table['Sector Name'] == name]
             if not row.empty:
@@ -196,7 +223,7 @@ class GICSDataClient:
     
     # retrieves all child GICS codes given a parent code
     def retrieve_children(self, parent_code):
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         
         parent_code_str = str(parent_code)
         code_length = len(parent_code_str)
@@ -230,13 +257,13 @@ class GICSDataClient:
 
     #directly off of gics_table,
     def retrieve_subindustries_gic_codes(self, industry_code):
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         companies = self.filter_companies_by_gics(gics_code=industry_code)
         return companies['GICS Code'].tolist()
         
     #return parent as a single dictionary with all the information 
     def retrieve_parent(self, child_code):
-        gics_table = pd.read_csv(os.path.join(self.save_path, 'gics_structure.csv'))
+        gics_table = self._load_gics_table()
         
         child_code_str = str(child_code)
         code_length = len(child_code_str)
