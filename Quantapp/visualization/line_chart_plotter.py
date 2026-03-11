@@ -831,8 +831,12 @@ class LineChartPlotter:
         dynamic_trace_count = len(detail_fig.data)
         detail_x_ref = max((trace.x for trace in detail_fig.data if len(trace.x) > 0), key=len, default=None)
         if detail_x_ref is not None:
+            add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, -1, 1, "rgba(211, 211, 211, 0.18)")
             add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, -3, -2, "rgba(0, 128, 0, 0.30)")
             add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, 2, 3, "rgba(180, 0, 0, 0.30)")
+            add_zone_annotation(detail_fig, 1, -1, 1, "Neutral", "rgba(235, 235, 235, 0.95)")
+            add_zone_annotation(detail_fig, 1, -0.85, -0.25, "Bullish Neutral (on the way up) ↑", "rgba(235, 235, 235, 0.90)")
+            add_zone_annotation(detail_fig, 1, 0.25, 0.85, "Bearish Neutral (on the way down) ↓", "rgba(235, 235, 235, 0.90)")
             add_zone_annotation(detail_fig, 1, -3, -2, "Accumulate", "rgba(235, 255, 235, 0.95)")
             add_zone_annotation(detail_fig, 1, 2, 3, "Liquidate", "rgba(255, 235, 235, 0.95)")
             add_sigma_reference_lines(detail_fig, 1, detail_x_ref)

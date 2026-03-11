@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 notebook = [
+    "arch",
     "ipykernel",
     "ipython",
 ]
