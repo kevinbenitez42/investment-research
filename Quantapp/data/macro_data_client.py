@@ -1,5 +1,6 @@
 import datetime
 import os
+from urllib.parse import urlencode
 
 try:
     import nasdaqdatalink
@@ -48,11 +49,31 @@ class MacroDataClient:
             raise ImportError("pandas_datareader is required for this method.")
         return pdr
 
-    def base_url(self, series_id):
+    def _format_fred_date(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, pd.Timestamp):
+            return value.strftime("%Y-%m-%d")
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value.strftime("%Y-%m-%d")
+        raise TypeError("Dates must be strings or datetime-like values.")
+
+    def base_url(self, series_id, start_date=None, end_date=None):
         " Constructs the base URL for FRED API requests."
         if not self.fred_api_key:
             raise ValueError("A FRED API key is required. Pass fred_key or set FRED_API_KEY.")
-        return f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={self.fred_api_key}&file_type=json"
+        params = {
+            "series_id": series_id,
+            "api_key": self.fred_api_key,
+            "file_type": "json",
+        }
+        if start_date is not None:
+            params["observation_start"] = self._format_fred_date(start_date)
+        if end_date is not None:
+            params["observation_end"] = self._format_fred_date(end_date)
+        return "https://api.stlouisfed.org/fred/series/observations?" + urlencode(params)
     
     def fetch_fred_json(self,query):
         """
@@ -112,6 +133,71 @@ class MacroDataClient:
         }
         
         return pd.concat([self.fetch_fred_json(self.base_url(series_id)).rename(columns={'value': name}) for name, series_id in series_ids.items()], axis=1)
+
+    def get_historical_treasury_yields(self, maturities=None, start_date=None, end_date=None, real=False):
+        """
+        Fetch historical US Treasury constant maturity yields from FRED.
+
+        Args:
+            maturities (str | list[str] | tuple[str] | None): Treasury maturities to fetch.
+                Uses all available maturities when omitted.
+            start_date (str | datetime.date | datetime.datetime | None): Optional start date.
+            end_date (str | datetime.date | datetime.datetime | None): Optional end date.
+            real (bool): When True, fetch real Treasury yields instead of nominal yields.
+
+        Returns:
+            pd.DataFrame: Treasury yield history indexed by date.
+        """
+        nominal_series_ids = {
+            "1M": "DGS1MO",
+            "3M": "DGS3MO",
+            "6M": "DGS6MO",
+            "1Y": "DGS1",
+            "2Y": "DGS2",
+            "3Y": "DGS3",
+            "5Y": "DGS5",
+            "7Y": "DGS7",
+            "10Y": "DGS10",
+            "20Y": "DGS20",
+            "30Y": "DGS30",
+        }
+        real_series_ids = {
+            "5Y": "DFII5",
+            "7Y": "DFII7",
+            "10Y": "DFII10",
+            "20Y": "DFII20",
+            "30Y": "DFII30",
+        }
+
+        series_ids = real_series_ids if real else nominal_series_ids
+
+        if maturities is None:
+            selected_series = series_ids
+        else:
+            if isinstance(maturities, str):
+                maturities = [maturities]
+
+            normalized_maturities = [maturity.upper() for maturity in maturities]
+            unsupported = [maturity for maturity in normalized_maturities if maturity not in series_ids]
+            if unsupported:
+                available = ", ".join(series_ids.keys())
+                requested = ", ".join(unsupported)
+                raise ValueError(
+                    f"Unsupported treasury maturities: {requested}. Available maturities: {available}."
+                )
+
+            selected_series = {
+                maturity: series_ids[maturity]
+                for maturity in normalized_maturities
+            }
+
+        frames = [
+            self.fetch_fred_json(
+                self.base_url(series_id, start_date=start_date, end_date=end_date)
+            ).rename(columns={"value": maturity})
+            for maturity, series_id in selected_series.items()
+        ]
+        return pd.concat(frames, axis=1).sort_index()
     
     def get_gdp_data(self):
         series_ids = {
