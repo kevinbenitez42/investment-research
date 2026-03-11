@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from .close_analytics import _calculate_excess_returns
 from .rolling import _rolling_sortino_ratio_frame
 from .series_utils import calculate_zscore
 
@@ -100,6 +101,32 @@ class RiskRelativeAnalytics:
         return ratio.where(rolling_std > 0).replace([np.inf, -np.inf], np.nan)
 
     @staticmethod
+    def _rolling_risk_components(
+        close: pd.Series,
+        window: int,
+        risk_free_rate=0.0,
+        annualization_factor: int = 252,
+    ) -> dict[str, pd.Series]:
+        """Compute rolling excess-return, volatility, and Sharpe components for one close series."""
+        returns = close.pct_change()
+        excess_returns = _calculate_excess_returns(
+            returns,
+            risk_free_rate=risk_free_rate,
+            annualization_factor=annualization_factor,
+        )
+        rolling_mean = excess_returns.rolling(window).mean()
+        rolling_std = excess_returns.rolling(window).std()
+        annualized_excess_return = annualization_factor * rolling_mean
+        annualized_volatility = np.sqrt(annualization_factor) * rolling_std
+        sharpe_ratio = np.sqrt(annualization_factor) * rolling_mean / rolling_std
+        sharpe_ratio = sharpe_ratio.where(rolling_std > 0).replace([np.inf, -np.inf], np.nan)
+        return {
+            "annualized_excess_return": annualized_excess_return,
+            "annualized_volatility": annualized_volatility,
+            "sharpe_ratio": sharpe_ratio,
+        }
+
+    @staticmethod
     def _latest_zscore_snapshot(metric_frame: pd.DataFrame) -> pd.Series:
         """Return the latest cross-sectional snapshot from time-series z-scored metrics."""
         if metric_frame.empty:
@@ -126,16 +153,44 @@ class RiskRelativeAnalytics:
             risk_free_rate=risk_free_rate,
         )
 
-    def asset_ratio_map(self, analytics, asset_close, time_frame_map, ratio_type: str) -> dict[str, pd.Series]:
+    def compute_asset_component_map(
+        self,
+        asset_close,
+        time_frame_map,
+        risk_free_rate=0.0,
+        annualization_factor: int = 252,
+    ) -> dict[str, dict[str, pd.Series]]:
+        """Compute rolling excess-return, volatility, and Sharpe components keyed by term."""
+        close = self._coerce_close_series(asset_close, argument_name="asset_close")
+        tf_map = self._coerce_time_frame_map(time_frame_map)
+        return {
+            term: self._rolling_risk_components(
+                close,
+                window=window,
+                risk_free_rate=risk_free_rate,
+                annualization_factor=annualization_factor,
+            )
+            for term, window in tf_map.items()
+        }
+
+    def asset_ratio_map(self, analytics, asset_close, time_frame_map, ratio_type: str, risk_free_rate=0.0) -> dict[str, pd.Series]:
         """Alias for ratio-map construction without the legacy `compute_` prefix."""
         return self.compute_asset_ratio_map(
             analytics=analytics,
             asset_close=asset_close,
             time_frame_map=time_frame_map,
             ratio_type=ratio_type,
+            risk_free_rate=risk_free_rate,
         )
 
-    def compute_asset_ratio_map(self, analytics, asset_close, time_frame_map, ratio_type: str) -> dict[str, pd.Series]:
+    def compute_asset_ratio_map(
+        self,
+        analytics,
+        asset_close,
+        time_frame_map,
+        ratio_type: str,
+        risk_free_rate=0.0,
+    ) -> dict[str, pd.Series]:
         """Compute one risk-adjusted ratio series per term/window."""
         close = self._coerce_close_series(asset_close, argument_name="asset_close")
         tf_map = self._coerce_time_frame_map(time_frame_map)
@@ -146,27 +201,35 @@ class RiskRelativeAnalytics:
                 close,
                 ratio_type=ratio_type,
                 windows=[window],
+                risk_free_rate=risk_free_rate,
             )
             ratio_map[term] = self._extract_ratio_series(ratio_df, ratio_type=ratio_type, window=window)
         return ratio_map
 
-    def asset_ratio_maps(self, analytics, asset_close, time_frame_map):
+    def asset_ratio_maps(self, analytics, asset_close, time_frame_map, risk_free_rate=0.0):
         """Alias for Sharpe/Sortino map construction without the legacy `compute_` prefix."""
-        return self.compute_asset_ratio_maps(analytics=analytics, asset_close=asset_close, time_frame_map=time_frame_map)
+        return self.compute_asset_ratio_maps(
+            analytics=analytics,
+            asset_close=asset_close,
+            time_frame_map=time_frame_map,
+            risk_free_rate=risk_free_rate,
+        )
 
-    def compute_asset_ratio_maps(self, analytics, asset_close, time_frame_map):
+    def compute_asset_ratio_maps(self, analytics, asset_close, time_frame_map, risk_free_rate=0.0):
         """Compute Sharpe and Sortino maps keyed by term."""
         asset_sharpe_map = self.compute_asset_ratio_map(
             analytics=analytics,
             asset_close=asset_close,
             time_frame_map=time_frame_map,
             ratio_type="sharpe",
+            risk_free_rate=risk_free_rate,
         )
         asset_sortino_map = self.compute_asset_ratio_map(
             analytics=analytics,
             asset_close=asset_close,
             time_frame_map=time_frame_map,
             ratio_type="sortino",
+            risk_free_rate=risk_free_rate,
         )
         return asset_sharpe_map, asset_sortino_map
 
@@ -180,7 +243,15 @@ class RiskRelativeAnalytics:
         """Compute left-right spread map using shared term keys."""
         return {term: left_map[term] - right_map[term] for term in left_map.keys() if term in right_map}
 
-    def benchmark_metrics(self, analytics, benchmark_data, asset_close, asset_sharpe_map, time_frame_map):
+    def benchmark_metrics(
+        self,
+        analytics,
+        benchmark_data,
+        asset_close,
+        asset_sharpe_map,
+        time_frame_map,
+        risk_free_rate=0.0,
+    ):
         """Alias for benchmark-metric construction without the legacy `compute_` prefix."""
         return self.compute_benchmark_metrics(
             analytics=analytics,
@@ -188,9 +259,18 @@ class RiskRelativeAnalytics:
             asset_close=asset_close,
             asset_sharpe_map=asset_sharpe_map,
             time_frame_map=time_frame_map,
+            risk_free_rate=risk_free_rate,
         )
 
-    def compute_benchmark_metrics(self, analytics, benchmark_data, asset_close, asset_sharpe_map, time_frame_map):
+    def compute_benchmark_metrics(
+        self,
+        analytics,
+        benchmark_data,
+        asset_close,
+        asset_sharpe_map,
+        time_frame_map,
+        risk_free_rate=0.0,
+    ):
         """Compute benchmark Sharpe, relative returns spread, and Sharpe spread by term."""
         close = self._coerce_close_series(asset_close, argument_name="asset_close")
         tf_map = self._coerce_time_frame_map(time_frame_map)
@@ -204,19 +284,17 @@ class RiskRelativeAnalytics:
             metrics[symbol] = {}
 
             for term, window in tf_map.items():
-                benchmark_sharpe_df = analytics.risk_adjusted_returns(
+                benchmark_components = self._rolling_risk_components(
                     benchmark_close,
-                    ratio_type="sharpe",
-                    windows=[window],
-                )
-                benchmark_sharpe = self._extract_ratio_series(
-                    benchmark_sharpe_df,
-                    ratio_type="sharpe",
                     window=window,
+                    risk_free_rate=risk_free_rate,
                 )
+                benchmark_sharpe = benchmark_components["sharpe_ratio"]
                 relative_spread = benchmark_close.pct_change(window) - close.pct_change(window)
                 metrics[symbol][term] = {
                     "spread": relative_spread,
+                    "annualized_excess_return": benchmark_components["annualized_excess_return"],
+                    "annualized_volatility": benchmark_components["annualized_volatility"],
                     "sharpe_ratio": benchmark_sharpe,
                     "sharpe_spread": benchmark_sharpe - asset_sharpe_map[term],
                 }
@@ -344,13 +422,26 @@ class RiskRelativeAnalytics:
             }
         return term_config_map
 
-    def build_sharpe_sortino_context(self, analytics, asset_close, time_frame_map, benchmark_data=None):
+    def build_sharpe_sortino_context(
+        self,
+        analytics,
+        asset_close,
+        time_frame_map,
+        benchmark_data=None,
+        risk_free_rate=0.0,
+    ):
         """Return all Sharpe/Sortino maps and benchmark-relative artifacts in one payload."""
         tf_map = self._coerce_time_frame_map(time_frame_map)
         asset_sharpe_map, asset_sortino_map = self.compute_asset_ratio_maps(
             analytics=analytics,
             asset_close=asset_close,
             time_frame_map=tf_map,
+            risk_free_rate=risk_free_rate,
+        )
+        asset_component_map = self.compute_asset_component_map(
+            asset_close=asset_close,
+            time_frame_map=tf_map,
+            risk_free_rate=risk_free_rate,
         )
         sharpe_sortino_spread_map = self.compute_ratio_spread_map(asset_sharpe_map, asset_sortino_map)
         benchmark_metrics = self.compute_benchmark_metrics(
@@ -359,6 +450,7 @@ class RiskRelativeAnalytics:
             asset_close=asset_close,
             asset_sharpe_map=asset_sharpe_map,
             time_frame_map=tf_map,
+            risk_free_rate=risk_free_rate,
         )
         benchmark_order = list(benchmark_metrics.keys())
         spread_plot_data = {
@@ -368,6 +460,7 @@ class RiskRelativeAnalytics:
 
         return {
             "asset_sharpe_map": asset_sharpe_map,
+            "asset_component_map": asset_component_map,
             "asset_sortino_map": asset_sortino_map,
             "asset_sharpe_sortino_spread_map": sharpe_sortino_spread_map,
             "benchmark_metrics": benchmark_metrics,
@@ -377,7 +470,14 @@ class RiskRelativeAnalytics:
             "term_config_map": self.build_term_config_map(asset_sharpe_map, asset_sortino_map, tf_map),
         }
 
-    def build_benchmark_plot_payload(self, asset_sharpe_map, benchmark_metrics, spread_plot_data, time_frame_map):
+    def build_benchmark_plot_payload(
+        self,
+        asset_sharpe_map,
+        benchmark_metrics,
+        spread_plot_data,
+        time_frame_map,
+        asset_component_map=None,
+    ):
         """
         Prepare z-scored benchmark comparison payload for plotting.
 
@@ -390,12 +490,13 @@ class RiskRelativeAnalytics:
                 "default_benchmark": str | None,
                 "asset_zscore_map": {term: Series},
                 "summary_zscore_map": {term: {symbol: Series}},
-                "detail_zscore_map": {symbol: {term: {"asset","benchmark","sharpe_spread","relative_spread"}}},
+                "detail_zscore_map": {symbol: {term: {"asset","benchmark","asset_sharpe","benchmark_sharpe", ...}}},
             }
         """
         tf_map = self._coerce_time_frame_map(time_frame_map)
         term_order = list(tf_map.keys())
         benchmark_order = list(benchmark_metrics.keys())
+        asset_component_map = asset_component_map or {}
 
         asset_zscore_map = {
             term: calculate_zscore(asset_sharpe_map[term].dropna()).dropna()
@@ -418,6 +519,8 @@ class RiskRelativeAnalytics:
             symbol_metrics = benchmark_metrics.get(symbol, {})
             for term in term_order:
                 term_metrics = symbol_metrics.get(term, {})
+                asset_components = asset_component_map.get(term, {})
+                asset_sharpe = asset_sharpe_map.get(term, pd.Series(dtype=float)).dropna()
                 benchmark_sharpe = calculate_zscore(
                     term_metrics.get("sharpe_ratio", pd.Series(dtype=float)).dropna()
                 ).dropna()
@@ -431,6 +534,12 @@ class RiskRelativeAnalytics:
                 detail_zscore_map[symbol][term] = {
                     "asset": asset_zscore_map.get(term, pd.Series(dtype=float)),
                     "benchmark": benchmark_sharpe,
+                    "asset_sharpe": asset_sharpe,
+                    "benchmark_sharpe": term_metrics.get("sharpe_ratio", pd.Series(dtype=float)).dropna(),
+                    "asset_excess_return": asset_components.get("annualized_excess_return", pd.Series(dtype=float)).dropna(),
+                    "benchmark_excess_return": term_metrics.get("annualized_excess_return", pd.Series(dtype=float)).dropna(),
+                    "asset_volatility": asset_components.get("annualized_volatility", pd.Series(dtype=float)).dropna(),
+                    "benchmark_volatility": term_metrics.get("annualized_volatility", pd.Series(dtype=float)).dropna(),
                     "sharpe_spread": sharpe_spread,
                     "relative_spread": relative_spread,
                 }

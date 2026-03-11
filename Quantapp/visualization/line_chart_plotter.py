@@ -656,7 +656,7 @@ class LineChartPlotter:
         template="plotly_dark",
     ):
         """
-        Plot benchmark detail panel: asset/benchmark z-score, Sharpe spread z-score, relative spread z-score.
+        Plot benchmark detail panel: z-score, Sharpe, excess return, and volatility decomposition.
         """
         if not benchmark_order:
             raise ValueError("benchmark_order is empty.")
@@ -671,14 +671,16 @@ class LineChartPlotter:
         default_benchmark = default_benchmark if default_benchmark in benchmark_order else benchmark_order[0]
 
         detail_fig = make_subplots(
-            rows=3,
+            rows=4,
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.05,
+            row_heights=[0.32, 0.23, 0.23, 0.22],
             subplot_titles=(
                 "Risk-Adjusted Return Z-Score Comparison",
-                "Sharpe Spread Z-Score",
-                "Relative Return Spread Z-Score",
+                "Rolling Sharpe Ratio",
+                "Annualized Excess Return",
+                "Annualized Volatility",
             ),
         )
 
@@ -702,18 +704,23 @@ class LineChartPlotter:
 
             asset_zscore = metric_set.get("asset", pd.Series(dtype=float)).dropna()
             benchmark_zscore = metric_set.get("benchmark", pd.Series(dtype=float)).dropna()
-            sharpe_spread_zscore = metric_set.get("sharpe_spread", pd.Series(dtype=float)).dropna()
-            relative_spread_zscore = metric_set.get("relative_spread", pd.Series(dtype=float)).dropna()
+            asset_sharpe = metric_set.get("asset_sharpe", pd.Series(dtype=float)).dropna()
+            benchmark_sharpe = metric_set.get("benchmark_sharpe", pd.Series(dtype=float)).dropna()
+            asset_excess_return = metric_set.get("asset_excess_return", pd.Series(dtype=float)).dropna()
+            benchmark_excess_return = metric_set.get("benchmark_excess_return", pd.Series(dtype=float)).dropna()
+            asset_volatility = metric_set.get("asset_volatility", pd.Series(dtype=float)).dropna()
+            benchmark_volatility = metric_set.get("benchmark_volatility", pd.Series(dtype=float)).dropna()
 
             detail_fig.add_trace(
                 go.Scatter(
                     x=asset_zscore.index,
                     y=asset_zscore,
                     mode="lines",
-                    name=f"{ticker_label} {term.title()} Z-Score",
+                    name=f"{ticker_label} {term.title()} Sharpe Z-Score",
                     legendgroup=f"asset-{term}",
-                    line=dict(color=style["color"], dash="solid"),
+                    line=dict(color=style["color"], dash="solid", width=2),
                     visible=visible,
+                    showlegend=visible,
                 ),
                 row=1,
                 col=1,
@@ -723,22 +730,23 @@ class LineChartPlotter:
                     x=benchmark_zscore.index,
                     y=benchmark_zscore,
                     mode="lines",
-                    name=f"{symbol} {term.title()} Z-Score",
+                    name=f"{symbol} {term.title()} Sharpe Z-Score",
                     legendgroup=f"{symbol}-{term}",
-                    line=dict(color=style["color"], dash="dot"),
+                    line=dict(color=style["color"], dash="dot", width=2),
                     visible=visible,
+                    showlegend=visible,
                 ),
                 row=1,
                 col=1,
             )
             detail_fig.add_trace(
                 go.Scatter(
-                    x=sharpe_spread_zscore.index,
-                    y=sharpe_spread_zscore,
+                    x=asset_sharpe.index,
+                    y=asset_sharpe,
                     mode="lines",
-                    name=f"{symbol} {term.title()} Sharpe Spread Z-Score",
-                    legendgroup=f"{symbol}-{term}-spread",
-                    line=dict(color=style["color"]),
+                    name=f"{ticker_label} {term.title()} Sharpe",
+                    legendgroup=f"asset-{term}",
+                    line=dict(color=style["color"], dash="solid", width=2),
                     visible=visible,
                     showlegend=False,
                 ),
@@ -747,16 +755,72 @@ class LineChartPlotter:
             )
             detail_fig.add_trace(
                 go.Scatter(
-                    x=relative_spread_zscore.index,
-                    y=relative_spread_zscore,
+                    x=benchmark_sharpe.index,
+                    y=benchmark_sharpe,
                     mode="lines",
-                    name=f"{symbol} {term.title()} Relative Spread Z-Score",
-                    legendgroup=f"{symbol}-{term}-relative",
-                    line=dict(color=style["color"]),
+                    name=f"{symbol} {term.title()} Sharpe",
+                    legendgroup=f"{symbol}-{term}",
+                    line=dict(color=style["color"], dash="dot", width=2),
+                    visible=visible,
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+            detail_fig.add_trace(
+                go.Scatter(
+                    x=asset_excess_return.index,
+                    y=asset_excess_return,
+                    mode="lines",
+                    name=f"{ticker_label} {term.title()} Excess Return",
+                    legendgroup=f"asset-{term}",
+                    line=dict(color=style["color"], dash="solid", width=2),
                     visible=visible,
                     showlegend=False,
                 ),
                 row=3,
+                col=1,
+            )
+            detail_fig.add_trace(
+                go.Scatter(
+                    x=benchmark_excess_return.index,
+                    y=benchmark_excess_return,
+                    mode="lines",
+                    name=f"{symbol} {term.title()} Excess Return",
+                    legendgroup=f"{symbol}-{term}",
+                    line=dict(color=style["color"], dash="dot", width=2),
+                    visible=visible,
+                    showlegend=False,
+                ),
+                row=3,
+                col=1,
+            )
+            detail_fig.add_trace(
+                go.Scatter(
+                    x=asset_volatility.index,
+                    y=asset_volatility,
+                    mode="lines",
+                    name=f"{ticker_label} {term.title()} Volatility",
+                    legendgroup=f"asset-{term}",
+                    line=dict(color=style["color"], dash="solid", width=2),
+                    visible=visible,
+                    showlegend=False,
+                ),
+                row=4,
+                col=1,
+            )
+            detail_fig.add_trace(
+                go.Scatter(
+                    x=benchmark_volatility.index,
+                    y=benchmark_volatility,
+                    mode="lines",
+                    name=f"{symbol} {term.title()} Volatility",
+                    legendgroup=f"{symbol}-{term}",
+                    line=dict(color=style["color"], dash="dot", width=2),
+                    visible=visible,
+                    showlegend=False,
+                ),
+                row=4,
                 col=1,
             )
 
@@ -772,14 +836,9 @@ class LineChartPlotter:
             add_zone_annotation(detail_fig, 1, -3, -2, "Accumulate", "rgba(235, 255, 235, 0.95)")
             add_zone_annotation(detail_fig, 1, 2, 3, "Liquidate", "rgba(255, 235, 235, 0.95)")
             add_sigma_reference_lines(detail_fig, 1, detail_x_ref)
-            for row in (2, 3):
-                add_horizontal_zone_trace(detail_fig, row, detail_x_ref, -2, -1.5, "rgba(180, 0, 0, 0.30)")
-                add_horizontal_zone_trace(detail_fig, row, detail_x_ref, 1.5, 2, "rgba(0, 128, 0, 0.30)")
-                add_zone_annotation(detail_fig, row, -2, -1.5, "Liquidate", "rgba(255, 235, 235, 0.95)")
-                add_zone_annotation(detail_fig, row, 1.5, 2, "Accumulate", "rgba(235, 255, 235, 0.95)")
-                add_mean_reference_line(detail_fig, row, detail_x_ref)
-                add_sigma_reference_lines(detail_fig, row, detail_x_ref, levels=(0.5, 1, 1.5, 2))
-                add_std_annotations(detail_fig, row, levels=(0.5, 1, 1.5, 2))
+            add_mean_reference_line(detail_fig, 2, detail_x_ref)
+            add_mean_reference_line(detail_fig, 3, detail_x_ref)
+            add_mean_reference_line(detail_fig, 4, detail_x_ref)
 
         total_traces = len(detail_fig.data)
         buttons = []
@@ -793,7 +852,7 @@ class LineChartPlotter:
                         {"visible": visibility},
                         {
                             "title": self._header_title(
-                                f"{ticker_label} vs {symbol} Benchmark Z-Score Detail [{term.title()} {time_frame_map[term]}-Day]"
+                                f"{ticker_label} vs {symbol} Risk-Adjusted Return Decomposition [{term.title()} {time_frame_map[term]}-Day]"
                             )
                         },
                     ],
@@ -801,8 +860,9 @@ class LineChartPlotter:
             )
 
         detail_fig.update_yaxes(title_text="Sharpe Z-Score", row=1, col=1)
-        detail_fig.update_yaxes(title_text="Sharpe Spread Z-Score", row=2, col=1)
-        detail_fig.update_yaxes(title_text="Relative Spread Z-Score", row=3, col=1)
+        detail_fig.update_yaxes(title_text="Sharpe Ratio", row=2, col=1)
+        detail_fig.update_yaxes(title_text="Excess Return", tickformat=".1%", row=3, col=1)
+        detail_fig.update_yaxes(title_text="Volatility", tickformat=".1%", row=4, col=1)
 
         detail_start = min((trace.x[0] for trace in detail_fig.data if len(trace.x) > 0), default=None)
         detail_end = max((trace.x[-1] for trace in detail_fig.data if len(trace.x) > 0), default=None)
@@ -810,7 +870,7 @@ class LineChartPlotter:
             detail_default_start = max(detail_start, detail_end - pd.DateOffset(years=3))
             detail_fig.update_xaxes(range=[detail_default_start, detail_end])
             time_range_menu = self._dropdown_menu(
-                buttons=build_time_range_buttons(detail_start, detail_end, axis_count=3),
+                buttons=build_time_range_buttons(detail_start, detail_end, axis_count=4),
                 x=0.18,
             )
         else:
@@ -818,9 +878,9 @@ class LineChartPlotter:
 
         detail_fig.update_layout(
             title=self._header_title(
-                f"{ticker_label} vs {default_benchmark} Benchmark Z-Score Detail [{default_term.title()} {time_frame_map[default_term]}-Day]"
+                f"{ticker_label} vs {default_benchmark} Risk-Adjusted Return Decomposition [{default_term.title()} {time_frame_map[default_term]}-Day]"
             ),
-            height=1200,
+            height=1350,
             margin=self._header_margin(),
             template=template,
             updatemenus=[
