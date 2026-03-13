@@ -28,23 +28,29 @@ class SeriesTransforms:
         frame = data.copy()
         if not isinstance(frame.index, pd.DatetimeIndex):
             frame.index = pd.to_datetime(frame.index)
+        frame = frame.sort_index()
+        close = frame["Close"]
 
         freq_map = {
-            "daily": "D",
-            "weekly": "W",
+            "weekly": "W-FRI",
             "monthly": "M",
             "quarterly": "Q",
             "yearly": "A",
         }
+        normalized_frequency = str(frequency).lower()
+
+        if normalized_frequency == "daily":
+            return close.pct_change(fill_method=None).dropna()
+
         try:
-            resample_freq = freq_map[str(frequency).lower()]
+            resample_freq = freq_map[normalized_frequency]
         except KeyError as exc:
             raise ValueError(
                 "Invalid frequency. Choose 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'."
             ) from exc
 
-        resampled = frame.resample(resample_freq).last()
-        return resampled["Close"].pct_change().dropna()
+        resampled = close.resample(resample_freq).last()
+        return resampled.pct_change(fill_method=None).dropna()
 
     @staticmethod
     def align_features_to_index(features_dict, reference_index):

@@ -39,39 +39,43 @@ class BarChartPlotter:
         - fig: Plotly Figure object.
         """
         
+        if isinstance(data, pd.DataFrame):
+            if data.shape[1] != 1:
+                raise ValueError("data must be a Series or single-column DataFrame.")
+            data = data.iloc[:, 0]
+        elif not isinstance(data, pd.Series):
+            raise TypeError("data must be a pandas Series or single-column DataFrame.")
+
+        data = data.copy().dropna().sort_index()
+
         # Ensure the index is a DateTimeIndex
         if not isinstance(data.index, pd.DatetimeIndex):
             data.index = pd.to_datetime(data.index)
+
+        current_returns = None
             
      
 
         if frequency == 'monthly':
-            group_by = data.index.month
             frequency_label = 'Month'
             periods = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             current_period_label = datetime.now().strftime('%b')
 
             # Calculate mean and median returns for each month
-            period_mean = data.groupby(group_by).mean()
-            period_median = data.groupby(group_by).median()
+            period_mean = data.groupby(data.index.month).mean().reindex(range(1, 13))
+            period_median = data.groupby(data.index.month).median().reindex(range(1, 13))
             # Map period indices to month abbreviations
             period_mean.index = periods
             period_median.index = periods
-            
-            #calculate the returns of each month this year up to the current month
-            current_year = datetime.now().year
-            current_month = datetime.now().month
-            
-            current_returns = data.loc[data.index.year == current_year]
-            current_returns = current_returns.loc[current_returns.index.month <= current_month]
-            
-            
+
+            current_year_returns = data.loc[data.index.year == datetime.now().year]
+            if not current_year_returns.empty:
+                current_returns = current_year_returns.groupby(current_year_returns.index.month).last().reindex(range(1, 13))
+                current_returns.index = periods
 
         elif frequency == 'weekly':
-            # Resample data to weekly frequency (weeks starting on Monday)
-            weekly_data = data.resample('W-MON').mean()
-            weekly_data = weekly_data.to_frame(name='Return')
+            weekly_data = data.to_frame(name='Return')
 
             # Assign month number and week of month
             weekly_data['Month_Num'] = weekly_data.index.month
@@ -102,69 +106,49 @@ class BarChartPlotter:
             current_period_num = current_month_num * 10 + current_week_of_month
             current_period_label_array = period_stats.loc[period_stats['Period_Num'] == current_period_num, 'Period_Label'].values
             current_period_label = current_period_label_array[0] if len(current_period_label_array) > 0 else None
-            
-            
-            # Calculate the current returns of each week for the current year
-            current_year = datetime.now().year
 
-            # Filter data for the current year and resample to weekly frequency
-            weekly_data_current_year = data.loc[data.index.year == current_year].resample('W-MON').mean()
-            weekly_data_current_year = weekly_data_current_year.to_frame(name='Return')
-
-            # Assign month number and week of month
-            weekly_data_current_year['Month_Num'] = weekly_data_current_year.index.month
-            weekly_data_current_year['Month_Name'] = weekly_data_current_year.index.strftime('%b')
-            weekly_data_current_year['Week_of_Month'] = weekly_data_current_year.index.to_series().apply(lambda d: (d.day - 1) // 7 + 1)
-
-            # Create period labels in the format 'Month / Week X'
-            weekly_data_current_year['Period_Label'] = weekly_data_current_year['Month_Name'] + ' / Week ' + weekly_data_current_year['Week_of_Month'].astype(str)
-
-            # Create a numerical representation for sorting
-            weekly_data_current_year['Period_Num'] = weekly_data_current_year['Month_Num'] * 10 + weekly_data_current_year['Week_of_Month']
-
-            # Extract current returns and set index to 'Period_Label'
-            current_returns = weekly_data_current_year.set_index('Period_Label')['Return']
-
-            # Reindex current_returns to match period_mean index, filling missing values with NaN
-            current_returns = current_returns.reindex(period_mean.index)
+            weekly_data_current_year = weekly_data.loc[weekly_data.index.year == datetime.now().year]
+            if not weekly_data_current_year.empty:
+                current_returns = weekly_data_current_year.set_index('Period_Label')['Return']
+                current_returns = current_returns[~current_returns.index.duplicated(keep='last')].reindex(period_mean.index)
             
     
         elif frequency == 'quarterly':
-            group_by = data.index.quarter
             frequency_label = 'Quarter'
             periods = ['Q1', 'Q2', 'Q3', 'Q4']
             current_quarter = (datetime.now().month - 1) // 3 + 1
             current_period_label = f'Q{current_quarter}'
 
             # Calculate mean and median returns for each quarter
-            period_mean = data.groupby(group_by).mean()
-            period_median = data.groupby(group_by).median()
+            period_mean = data.groupby(data.index.quarter).mean().reindex(range(1, 5))
+            period_median = data.groupby(data.index.quarter).median().reindex(range(1, 5))
             # Map period indices to quarters
             period_mean.index = [f'Q{i}' for i in period_mean.index]
             period_median.index = [f'Q{i}' for i in period_median.index]
-            
-            #calculate the returns of quarters this year up to the current quarter
-            current_year = datetime.now().year
-            current_quarter = (datetime.now().month - 1) // 3 + 1
-            
-            current_returns = data.loc[data.index.year == current_year]
-            current_returns = current_returns.loc[current_returns.index.quarter <= current_quarter]
-            
-            
+
+            current_year_returns = data.loc[data.index.year == datetime.now().year]
+            if not current_year_returns.empty:
+                current_returns = current_year_returns.groupby(current_year_returns.index.quarter).last().reindex(range(1, 5))
+                current_returns.index = [f'Q{i}' for i in current_returns.index]
+
         elif frequency == 'daily':
             # Group by month and day in MM-DD format
-            group_by = data.index.strftime('%m-%d')
             frequency_label = 'Day (MM/DD)'
             periods = sorted(data.index.strftime('%m/%d').unique())
             current_day = datetime.now().strftime('%m/%d')
             current_period_label = current_day if current_day in periods else None
 
             # Calculate mean and median returns for each day
-            period_mean = data.groupby(group_by).mean()
-            period_median = data.groupby(group_by).median()
+            period_mean = data.groupby(data.index.strftime('%m-%d')).mean()
+            period_median = data.groupby(data.index.strftime('%m-%d')).median()
             # Map period indices to MM/DD format
             period_mean.index = periods
             period_median.index = periods
+
+            current_year_returns = data.loc[data.index.year == datetime.now().year].copy()
+            if not current_year_returns.empty:
+                current_year_returns.index = current_year_returns.index.strftime('%m/%d')
+                current_returns = current_year_returns
             
             window_size = 30
             if current_day in period_mean.index:
@@ -189,6 +173,8 @@ class BarChartPlotter:
 
             period_mean = period_mean_window
             period_median = period_median_window
+            if current_returns is not None:
+                current_returns = current_returns.reindex(period_mean.index)
             
 
         
@@ -206,14 +192,22 @@ class BarChartPlotter:
             period_mean.index = periods
             period_median.index = periods
 
+            current_returns = data.loc[data.index.year == datetime.now().year]
+            if not current_returns.empty:
+                current_returns = current_returns.groupby(current_returns.index.year).last()
+                current_returns.index = current_returns.index.astype(str)
+                current_returns = current_returns.reindex(period_mean.index)
+
         else:
             raise ValueError("Invalid frequency. Choose 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'.")
 
         # Determine colors for bars
+        default_bar_color = '#3B82F6'
+        highlight_bar_color = '#F59E0B'
         if current_period_label and current_period_label in period_mean.index:
-            colors = ['red' if period == current_period_label else 'blue' for period in period_mean.index]
+            colors = [highlight_bar_color if period == current_period_label else default_bar_color for period in period_mean.index]
         else:
-            colors = ['red' if period == period_mean.index[-1] else 'blue' for period in period_mean.index]
+            colors = [highlight_bar_color if period == period_mean.index[-1] else default_bar_color for period in period_mean.index]
 
         # Create the figure
         fig = go.Figure()
@@ -227,16 +221,45 @@ class BarChartPlotter:
             hovertemplate='Mean: %{y:.4f}<extra></extra>'
         ))
 
-        # Add scatter trace for median returns
+        median_stem_x = []
+        median_stem_y = []
+        for period, value in zip(period_median.index, period_median.values):
+            if pd.isna(value):
+                continue
+            median_stem_x.extend([period, period, None])
+            median_stem_y.extend([0, value, None])
+
+        fig.add_trace(go.Scatter(
+            x=median_stem_x,
+            y=median_stem_y,
+            mode='lines',
+            name='Median Stem',
+            line=dict(color='red', width=2),
+            hoverinfo='skip',
+            showlegend=False,
+        ))
+
+        # Add lollipop head trace for median returns
         fig.add_trace(go.Scatter(
             x=period_median.index,
             y=period_median.values,
-            mode='lines+markers',
+            mode='markers',
             name='Median Return',
-            line=dict(color='red', width=2),
-            marker=dict(size=8),
+            marker=dict(size=9, color='red'),
             hovertemplate='Median: %{y:.4f}<extra></extra>'
         ))
+
+        if current_returns is not None and pd.Series(current_returns).notna().any():
+            current_returns = pd.Series(current_returns).reindex(period_mean.index)
+            fig.add_trace(go.Scatter(
+                x=current_returns.index,
+                y=current_returns.values,
+                mode='lines+markers',
+                name=f'{datetime.now().year} Return',
+                line=dict(color='#22C55E', width=2),
+                marker=dict(size=10, color='#22C55E', symbol='diamond'),
+                hovertemplate='Current Year: %{y:.4f}<extra></extra>'
+            ))
         
         # Update layout
         fig.update_layout(
