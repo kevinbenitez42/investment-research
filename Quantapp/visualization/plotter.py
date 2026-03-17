@@ -2,7 +2,8 @@ import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
 #import Quantapps Computation libarary
-from Quantapp.analytics import CrossSectionStats, Rolling
+from Quantapp.analytics.cross_section_stats import CrossSectionStats
+from Quantapp.analytics.rolling import Rolling
 import pandas as pd
 import yfinance as yf
 from statsmodels.tsa.stattools import coint
@@ -552,7 +553,7 @@ class Plotter:
             
         return fig
     
-    def plot_percentage_drop(self,data, n=14, title='Percentage Drop from Highest Peak'):
+    def plot_percentage_drop(self, data, n=14, title='Percentage Drop from Highest Peak', show=True):
         """
         Plot the percentage drop from the highest peak using Plotly, including lines for the mean percentage drop
         and negative standard deviation levels. Color bars blue if they fall below the mean, and red if below 0.5 
@@ -671,15 +672,18 @@ class Plotter:
             barmode='overlay'
         )
         
-        # Show the plot
-        fig.show()
+        if show:
+            fig.show()
+
+        return fig
         
     def plot_series_with_stdev_bands(
         self,
         data_series,
         stdev_values=[-0.5, 0.5, 1.5, 3],
         num_years=5,
-        title="Series with Mean & Standard Deviations"
+        title="Series with Mean & Standard Deviations",
+        show=True,
     ):
         """
         Plots a given data series, adding horizontal lines for mean and multiple standard deviations.
@@ -781,7 +785,10 @@ class Plotter:
             ),
         )
 
-        fig.show()
+        if show:
+            fig.show()
+
+        return fig
             
     def plot_candlestick(self,ticker_data, drop_window=14, period='1Y', bollinger_window=21, title="Candlestick With Bollinger Bands"):
         """
@@ -2047,7 +2054,7 @@ class Plotter:
         # Show the figure
         fig.show()
     
-    def plot_rolling_regression(self, rolling_results, ticker_str, factor_returns):
+    def plot_rolling_regression(self, rolling_results, ticker_str, factor_returns, show=True):
         # Plot the alpha
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -2111,7 +2118,9 @@ class Plotter:
                 zeroline=False
             )
         )
-        fig.show()
+        alpha_fig = fig
+        if show:
+            alpha_fig.show()
         # Create subplots: one row per factor
         # Exclude the 'RF' column so that we only plot factor betas (e.g., Mkt-RF, SMB, HML)
         factors_to_plot = [factor for factor in factor_returns.columns if factor != "RF"]
@@ -2153,7 +2162,9 @@ class Plotter:
             height=400 * num_factors,
             showlegend=False
         )
-        fig.show()
+        beta_fig = fig
+        if show:
+            beta_fig.show()
         # Plot the R-squared and adjusted R-squared
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -2206,9 +2217,24 @@ class Plotter:
                 zeroline=False
             )
         )
-        fig.show()
+        rsquared_fig = fig
+        if show:
+            rsquared_fig.show()
 
-    def plot_idiosyncratic_risk(self, rolling_results, ticker_str, column="idio_vol_annualized", template="plotly_white"):
+        return {
+            "alpha": alpha_fig,
+            "betas": beta_fig,
+            "r_squared": rsquared_fig,
+        }
+
+    def plot_idiosyncratic_risk(
+        self,
+        rolling_results,
+        ticker_str,
+        column="idio_vol_annualized",
+        template="plotly_white",
+        show=True,
+    ):
         """
         Plot rolling idiosyncratic risk from regression results.
 
@@ -2247,4 +2273,7 @@ class Plotter:
             template=template,
             legend=dict(x=0.01, y=0.99),
         )
-        fig.show()
+        if show:
+            fig.show()
+
+        return fig

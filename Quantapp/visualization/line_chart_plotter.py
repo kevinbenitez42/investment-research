@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
 #import Quantapps Computation libarary
-from Quantapp.analytics import Rolling
+from Quantapp.analytics.rolling import Rolling
 import pandas as pd
 import yfinance as yf
 from statsmodels.tsa.stattools import coint
@@ -22,6 +22,7 @@ import copy
 from collections.abc import Mapping
 from Quantapp.data.market_data_client import MarketDataClient
 from .figure_helpers import (
+    add_horizontal_zone,
     add_horizontal_zone_trace,
     add_mean_reference_line,
     add_sigma_reference_lines,
@@ -92,6 +93,45 @@ class LineChartPlotter:
         except (TypeError, ValueError):
             return None
         return coerced if coerced > 0 else None
+
+    @staticmethod
+    def _coerce_timestamp(value):
+        if value is None:
+            return None
+        if isinstance(value, pd.Timestamp):
+            return value
+        if isinstance(value, datetime):
+            return pd.Timestamp(value)
+        if isinstance(value, np.datetime64):
+            return pd.Timestamp(value)
+        if isinstance(value, str):
+            try:
+                coerced = pd.to_datetime(value, errors="raise")
+            except (TypeError, ValueError):
+                return None
+            return None if pd.isna(coerced) else pd.Timestamp(coerced)
+        return None
+
+    @classmethod
+    def _trace_datetime_bounds(cls, traces):
+        starts = []
+        ends = []
+        for trace in traces:
+            x_values = getattr(trace, "x", None)
+            if x_values is None or len(x_values) == 0:
+                continue
+
+            start = cls._coerce_timestamp(x_values[0])
+            end = cls._coerce_timestamp(x_values[-1])
+            if start is None or end is None:
+                continue
+
+            starts.append(start)
+            ends.append(end)
+
+        if not starts:
+            return None, None
+        return min(starts), max(ends)
 
     @classmethod
     def _preferred_numeric_window(cls, options, preferred=200):
@@ -868,8 +908,7 @@ class LineChartPlotter:
         detail_fig.update_yaxes(title_text="Excess Return", tickformat=".1%", row=3, col=1)
         detail_fig.update_yaxes(title_text="Volatility", tickformat=".1%", row=4, col=1)
 
-        detail_start = min((trace.x[0] for trace in detail_fig.data if len(trace.x) > 0), default=None)
-        detail_end = max((trace.x[-1] for trace in detail_fig.data if len(trace.x) > 0), default=None)
+        detail_start, detail_end = self._trace_datetime_bounds(detail_fig.data)
         if detail_start is not None and detail_end is not None:
             detail_default_start = max(detail_start, detail_end - pd.DateOffset(years=3))
             detail_fig.update_xaxes(range=[detail_default_start, detail_end])
@@ -903,7 +942,7 @@ class LineChartPlotter:
         window_options=None,
         default_window=None,
         ticker_label="Asset",
-        template="plotly_white",
+        template="plotly_dark",
     ):
         """
         Plot rolling drawdown, skew, kurtosis, and gini z-scores with window dropdown.
@@ -939,6 +978,12 @@ class LineChartPlotter:
             ),
         )
 
+        metric_colors = {
+            "drawdown": "#1f77b4",
+            "skew": "#ff7f0e",
+            "kurtosis": "#2ca02c",
+            "gini": "#d62728",
+        }
         traces_per_window = None
         zscore_index_candidates = []
 
@@ -958,7 +1003,7 @@ class LineChartPlotter:
                     y=drawdown_series,
                     mode="lines",
                     name=f"{window}-Day Max Drawdown",
-                    line=dict(color="red"),
+                    line=dict(color=metric_colors["drawdown"]),
                     fill="tozeroy",
                     visible=visible,
                 ),
@@ -972,7 +1017,7 @@ class LineChartPlotter:
                     y=skew_series,
                     mode="lines",
                     name=f"{window}-Day Skew Z-Score",
-                    line=dict(color="blue"),
+                    line=dict(color=metric_colors["skew"]),
                     visible=visible,
                 ),
                 row=2,
@@ -985,7 +1030,7 @@ class LineChartPlotter:
                     y=kurtosis_series,
                     mode="lines",
                     name=f"{window}-Day Excess Kurtosis Z-Score",
-                    line=dict(color="purple"),
+                    line=dict(color=metric_colors["kurtosis"]),
                     visible=visible,
                 ),
                 row=3,
@@ -998,7 +1043,7 @@ class LineChartPlotter:
                     y=gini_series,
                     mode="lines",
                     name=f"{window}-Day Gini Coefficient Z-Score",
-                    line=dict(color="green"),
+                    line=dict(color=metric_colors["gini"]),
                     visible=visible,
                 ),
                 row=4,
@@ -1018,9 +1063,24 @@ class LineChartPlotter:
 
         x_ref = max(zscore_index_candidates, key=len, default=pd.Index([]))
         if len(x_ref) > 0:
-            for row in (2, 3, 4):
+            for row in (2, 4):
                 add_mean_reference_line(fig, row, x_ref)
-                add_sigma_reference_lines(fig, row, x_ref, line_color="gray")
+                add_sigma_reference_lines(
+                    fig,
+                    row,
+                    x_ref,
+                    levels=(1, 1.5, 2, 3) if row == 2 else (1, 2, 3),
+                )
+            add_mean_reference_line(fig, 3, x_ref)
+            for value in (-1.5, -1, -0.5, 1, 2, 3):
+                fig.add_hline(
+                    y=value,
+                    row=3,
+                    col=1,
+                    line_dash="dot",
+                    line_color="rgba(220, 220, 220, 0.55)",
+                    line_width=1,
+                )
 
         total_traces = len(fig.data)
         first_constant_trace = traces_per_window * len(window_options)
@@ -1049,16 +1109,533 @@ class LineChartPlotter:
         fig.update_yaxes(title_text="Skew Z", row=2, col=1)
         fig.update_yaxes(title_text="Excess Kurtosis Z", row=3, col=1)
         fig.update_yaxes(title_text="Gini Z", row=4, col=1)
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-3,
+            y1=-1.5,
+            fillcolor="rgba(180, 0, 0, 0.30)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-1.5,
+            y1=1.5,
+            fillcolor="rgba(211, 211, 211, 0.18)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-1,
+            y1=1,
+            fillcolor="rgba(169, 169, 169, 0.24)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=1.5,
+            y1=3,
+            fillcolor="rgba(180, 0, 0, 0.30)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_zone_annotation(
+            fig,
+            row=2,
+            col=1,
+            y0=-1.5,
+            y1=-1,
+            text="More Likely to Have Larger Upside Moves ↑",
+            font_color="rgba(235, 235, 235, 0.92)",
+        )
+        add_zone_annotation(
+            fig,
+            row=2,
+            col=1,
+            y0=1,
+            y1=1.5,
+            text="More Likely to Have Larger Downside Moves ↓",
+            font_color="rgba(235, 235, 235, 0.92)",
+        )
 
         fig.update_layout(
             updatemenus=[
                 self._dropdown_menu(
                     buttons=buttons,
-                    x=0.1,
+                    x=0.0,
                 )
             ],
             title=self._header_title(f"{ticker_label} Rolling Risk Metrics Z-Scores ({default_window}-Day Window)"),
             height=1500,
+            margin=self._header_margin(),
+            template=template,
+            showlegend=False,
+        )
+        return fig
+
+    def plot_rolling_max_drawdown(
+        self,
+        metrics_by_window,
+        window_options=None,
+        default_window=None,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot textbook rolling max drawdown with a window dropdown.
+        """
+        if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
+            raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
+
+        if window_options is None:
+            window_options = list(metrics_by_window.keys())
+        else:
+            try:
+                window_options = [int(w) for w in window_options]
+            except Exception as exc:
+                raise ValueError("window_options must be iterable integers.") from exc
+            window_options = [w for w in window_options if w in metrics_by_window]
+
+        if not window_options:
+            raise ValueError("No valid window options available for plotting.")
+
+        if default_window not in window_options:
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
+
+        fig = go.Figure()
+        drawdown_series_map = {}
+
+        for window in window_options:
+            drawdown_series = metrics_by_window.get(window, {}).get("max_drawdown", pd.Series(dtype=float)).dropna()
+            drawdown_series_map[window] = drawdown_series
+            fig.add_trace(
+                go.Scatter(
+                    x=drawdown_series.index,
+                    y=drawdown_series,
+                    mode="lines",
+                    name=f"{window}-Day Max Drawdown",
+                    line=dict(color="#1f77b4"),
+                    fill="tozeroy",
+                    visible=window == default_window,
+                )
+            )
+
+        buttons = []
+        total_traces = len(fig.data)
+        for idx, window in enumerate(window_options):
+            visibility = [trace_idx == idx for trace_idx in range(total_traces)]
+            buttons.append(
+                dict(
+                    label=str(window),
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {"title": self._header_title(f"{ticker_label} Textbook Rolling Max Drawdown ({window}-Day Window)")},
+                    ],
+                )
+            )
+
+        available_indexes = [series.index for series in drawdown_series_map.values() if not series.empty]
+        if available_indexes:
+            global_start = min(index[0] for index in available_indexes)
+            global_end = max(index[-1] for index in available_indexes)
+            default_start = max(global_start, global_end - pd.DateOffset(years=3))
+            fig.update_xaxes(range=[default_start, global_end])
+            time_range_menu = self._dropdown_menu(
+                buttons=build_time_range_buttons(global_start, global_end),
+                x=0.18,
+            )
+            updatemenus = [
+                self._dropdown_menu(buttons=buttons, x=0.0),
+                time_range_menu,
+            ]
+        else:
+            updatemenus = [self._dropdown_menu(buttons=buttons, x=0.0)]
+
+        fig.update_yaxes(title_text="Drawdown", tickformat=".0%")
+        fig.update_layout(
+            updatemenus=updatemenus,
+            title=self._header_title(f"{ticker_label} Textbook Rolling Max Drawdown ({default_window}-Day Window)"),
+            height=650,
+            margin=self._header_margin(),
+            template=template,
+            showlegend=False,
+        )
+        return fig
+
+    def plot_distribution_shape_zscores(
+        self,
+        metrics_by_window,
+        window_options=None,
+        default_window=None,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot daily returns with rolling quantile bands plus skew/kurtosis/gini z-scores.
+        """
+        if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
+            raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
+
+        if window_options is None:
+            window_options = list(metrics_by_window.keys())
+        else:
+            try:
+                window_options = [int(w) for w in window_options]
+            except Exception as exc:
+                raise ValueError("window_options must be iterable integers.") from exc
+            window_options = [w for w in window_options if w in metrics_by_window]
+
+        if not window_options:
+            raise ValueError("No valid window options available for plotting.")
+
+        if default_window not in window_options:
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
+
+        fig = make_subplots(
+            rows=4,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            subplot_titles=(
+                "Daily Returns with Rolling Quantile Bands",
+                "Rolling Skew Z-Score",
+                "Rolling Excess Kurtosis Z-Score",
+                "Rolling Gini Coefficient Z-Score",
+            ),
+        )
+
+        metric_colors = {
+            "return_median": "#f8fafc",
+            "outer_band": "rgba(148, 163, 184, 0.18)",
+            "inner_band": "rgba(148, 163, 184, 0.32)",
+            "skew": "#ff7f0e",
+            "kurtosis": "#2ca02c",
+            "gini": "#d62728",
+        }
+        traces_per_window = None
+        zscore_index_candidates = []
+
+        for window in window_options:
+            visible = window == default_window
+            metric_set = metrics_by_window.get(window, {})
+            daily_return_series = metric_set.get("daily_returns", pd.Series(dtype=float)).dropna()
+            return_q10 = metric_set.get("return_q10", pd.Series(dtype=float)).dropna()
+            return_q25 = metric_set.get("return_q25", pd.Series(dtype=float)).dropna()
+            return_median = metric_set.get("return_median", pd.Series(dtype=float)).dropna()
+            return_q75 = metric_set.get("return_q75", pd.Series(dtype=float)).dropna()
+            return_q90 = metric_set.get("return_q90", pd.Series(dtype=float)).dropna()
+            skew_series = metric_set.get("skew_z", pd.Series(dtype=float)).dropna()
+            kurtosis_series = metric_set.get("kurtosis_z", pd.Series(dtype=float)).dropna()
+            gini_series = metric_set.get("gini_z", pd.Series(dtype=float)).dropna()
+
+            trace_start = len(fig.data)
+
+            return_colors = np.where(
+                daily_return_series >= 0,
+                "rgba(34, 197, 94, 0.45)",
+                "rgba(239, 68, 68, 0.45)",
+            ).tolist()
+
+            fig.add_trace(
+                go.Bar(
+                    x=daily_return_series.index,
+                    y=daily_return_series,
+                    name=f"{window}-Day 1D Returns",
+                    marker_color=return_colors,
+                    visible=visible,
+                    opacity=0.75,
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=return_q90.index,
+                    y=return_q90,
+                    mode="lines",
+                    name=f"{window}-Day 90th Percentile",
+                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                    visible=visible,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=return_q10.index,
+                    y=return_q10,
+                    mode="lines",
+                    name=f"{window}-Day 10th Percentile",
+                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                    fill="tonexty",
+                    fillcolor=metric_colors["outer_band"],
+                    visible=visible,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=return_q75.index,
+                    y=return_q75,
+                    mode="lines",
+                    name=f"{window}-Day 75th Percentile",
+                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                    visible=visible,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=return_q25.index,
+                    y=return_q25,
+                    mode="lines",
+                    name=f"{window}-Day 25th Percentile",
+                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                    fill="tonexty",
+                    fillcolor=metric_colors["inner_band"],
+                    visible=visible,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=return_median.index,
+                    y=return_median,
+                    mode="lines",
+                    name=f"{window}-Day Rolling Median",
+                    line=dict(color=metric_colors["return_median"], width=1.6, dash="dash"),
+                    visible=visible,
+                ),
+                row=1,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=skew_series.index,
+                    y=skew_series,
+                    mode="lines",
+                    name=f"{window}-Day Skew Z-Score",
+                    line=dict(color=metric_colors["skew"]),
+                    visible=visible,
+                ),
+                row=2,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=kurtosis_series.index,
+                    y=kurtosis_series,
+                    mode="lines",
+                    name=f"{window}-Day Excess Kurtosis Z-Score",
+                    line=dict(color=metric_colors["kurtosis"]),
+                    visible=visible,
+                ),
+                row=3,
+                col=1,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=gini_series.index,
+                    y=gini_series,
+                    mode="lines",
+                    name=f"{window}-Day Gini Coefficient Z-Score",
+                    line=dict(color=metric_colors["gini"]),
+                    visible=visible,
+                ),
+                row=4,
+                col=1,
+            )
+
+            added_traces = len(fig.data) - trace_start
+            if traces_per_window is None:
+                traces_per_window = added_traces
+
+            for series in (skew_series, kurtosis_series, gini_series):
+                if not series.empty:
+                    zscore_index_candidates.append(series.index)
+
+        if traces_per_window is None or traces_per_window <= 0:
+            traces_per_window = 9
+
+        x_ref = max(zscore_index_candidates, key=len, default=pd.Index([]))
+        if len(x_ref) > 0:
+            for row in (2, 4):
+                add_mean_reference_line(fig, row, x_ref)
+                add_sigma_reference_lines(
+                    fig,
+                    row,
+                    x_ref,
+                    levels=(1, 1.5, 2, 3) if row == 2 else (1, 2, 3),
+                )
+            add_mean_reference_line(fig, 3, x_ref)
+            for value in (-1.5, -1, -0.5, 1, 2, 3):
+                fig.add_hline(
+                    y=value,
+                    row=3,
+                    col=1,
+                    line_dash="dot",
+                    line_color="rgba(220, 220, 220, 0.55)",
+                    line_width=1,
+                )
+
+        total_traces = len(fig.data)
+        first_constant_trace = traces_per_window * len(window_options)
+        constant_trace_indices = list(range(first_constant_trace, total_traces))
+        buttons = []
+        for idx, window in enumerate(window_options):
+            visibility = build_visibility_mask(
+                total_traces=total_traces,
+                active_window_index=idx,
+                traces_per_window=traces_per_window,
+                constant_trace_indices=constant_trace_indices,
+            )
+            buttons.append(
+                dict(
+                    label=str(window),
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {"title": self._header_title(f"{ticker_label} Rolling Distribution Z-Scores ({window}-Day Window)")},
+                    ],
+                )
+            )
+
+        fig.update_yaxes(title_text="1D Return", tickformat=".1%", row=1, col=1)
+        fig.update_yaxes(title_text="Skew Z", row=2, col=1)
+        fig.update_yaxes(title_text="Excess Kurtosis Z", row=3, col=1)
+        fig.update_yaxes(title_text="Gini Z", row=4, col=1)
+        fig.add_hline(
+            y=0,
+            row=1,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(248, 250, 252, 0.45)",
+            line_width=1,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-3,
+            y1=-1.5,
+            fillcolor="rgba(180, 0, 0, 0.30)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-1.5,
+            y1=1.5,
+            fillcolor="rgba(211, 211, 211, 0.18)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=-1,
+            y1=1,
+            fillcolor="rgba(169, 169, 169, 0.24)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=2,
+            col=1,
+            y0=1.5,
+            y1=3,
+            fillcolor="rgba(180, 0, 0, 0.30)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_zone_annotation(
+            fig,
+            row=2,
+            col=1,
+            y0=-1.5,
+            y1=-1,
+            text="More Likely to Have Larger Upside Moves",
+            font_color="rgba(235, 235, 235, 0.92)",
+        )
+        add_zone_annotation(
+            fig,
+            row=2,
+            col=1,
+            y0=1,
+            y1=1.5,
+            text="More Likely to Have Larger Downside Moves",
+            font_color="rgba(235, 235, 235, 0.92)",
+        )
+        add_horizontal_zone(
+            fig,
+            row=3,
+            col=1,
+            y0=-1.5,
+            y1=-1,
+            fillcolor="rgba(180, 0, 0, 0.24)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+        add_horizontal_zone(
+            fig,
+            row=3,
+            col=1,
+            y0=-1,
+            y1=-0.5,
+            fillcolor="rgba(56, 189, 248, 0.16)",
+            opacity=1.0,
+            line_color="rgba(0, 0, 0, 0)",
+            line_width=0,
+        )
+
+        fig.update_layout(
+            updatemenus=[
+                self._dropdown_menu(
+                    buttons=buttons,
+                    x=0.0,
+                )
+            ],
+            title=self._header_title(f"{ticker_label} Daily Returns & Distribution Z-Scores ({default_window}-Day Window)"),
+            height=1450,
             margin=self._header_margin(),
             template=template,
             showlegend=False,

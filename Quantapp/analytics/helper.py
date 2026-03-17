@@ -6,7 +6,10 @@ from sklearn.decomposition import PCA
 import holidays
 from statsmodels.tsa.seasonal import STL
 from scipy.stats import entropy as scipy_entropy
-import investpy
+try:
+    import investpy
+except ModuleNotFoundError:  # Optional dependency for selected data workflows.
+    investpy = None
 import requests 
 from bs4 import BeautifulSoup
 import statsmodels.api as sm

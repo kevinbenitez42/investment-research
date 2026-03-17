@@ -27,6 +27,10 @@ notebook = [
     "ipykernel",
     "ipython",
 ]
+dashboard = [
+    "arch",
+    "dash",
+]
 data = [
     "investpy",
     "nasdaq-data-link",

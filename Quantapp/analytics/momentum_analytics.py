@@ -143,13 +143,15 @@ class MomentumAnalytics:
         """Compute rolling Sharpe values for each window and the optimal window by date."""
         close = self._coerce_close_series(close_series)
         returns = close.pct_change()
-        sharpe_df = pd.DataFrame(index=close.index)
+        sharpe_by_window = {}
 
         for window in windows:
             window = int(window)
             mean_return = returns.rolling(window=window).mean()
             std_return = returns.rolling(window=window).std()
-            sharpe_df[window] = mean_return / (std_return + 1e-8)
+            sharpe_by_window[window] = mean_return / (std_return + 1e-8)
+
+        sharpe_df = pd.DataFrame(sharpe_by_window, index=close.index)
 
         sharpe_df = sharpe_df.dropna(how="all")
         sharpe_df["Optimal_Window"] = sharpe_df.idxmax(axis=1).astype(float)
@@ -228,10 +230,12 @@ class MomentumAnalytics:
         median_sharpe = sharpe_only.median()
 
         returns = close.pct_change()
-        volatility_df = pd.DataFrame(index=close.index)
-        for window in window_sizes:
-            volatility_df[window] = returns.rolling(window=window).std()
-        volatility_df = volatility_df.reindex(sorted(volatility_df.columns), axis=1)
+        volatility_by_window = {
+            int(window): returns.rolling(window=int(window)).std()
+            for window in window_sizes
+        }
+        volatility_df = pd.DataFrame(volatility_by_window, index=close.index)
+        volatility_df = volatility_df.reindex(sorted(volatility_by_window), axis=1)
         mean_volatility = volatility_df.mean()
         median_volatility = volatility_df.median()
 

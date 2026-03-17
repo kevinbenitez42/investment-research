@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
 #import Quantapps Computation libarary
-from Quantapp.analytics import Rolling
+from Quantapp.analytics.rolling import Rolling
 import pandas as pd
 import yfinance as yf
 from statsmodels.tsa.stattools import coint

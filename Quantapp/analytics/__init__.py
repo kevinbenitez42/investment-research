@@ -1,6 +1,9 @@
 """Analytics and computation helpers."""
 
-from .algorithm import Algorithm
+try:
+    from .algorithm import Algorithm
+except ModuleNotFoundError:  # Optional dependency path, e.g. investpy not installed.
+    Algorithm = None
 from .close_analytics import CloseAnalytics
 from .cross_section_stats import CrossSectionStats
 from .feature_engineering import FeatureEngineering
@@ -15,6 +18,7 @@ from .rolling import Rolling, TimeSeriesAnalytics
 from .series_transforms import SeriesTransforms
 from .series_utils import (
     calculate_max_drawdown,
+    calculate_textbook_rolling_max_drawdown,
     calculate_window_metrics,
     calculate_zscore,
     gini_coefficient,
@@ -45,6 +49,7 @@ __all__ = [
     "calculate_zscore",
     "zscore",
     "calculate_max_drawdown",
+    "calculate_textbook_rolling_max_drawdown",
     "gini_coefficient",
     "calculate_window_metrics",
 ]
