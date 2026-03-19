@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 
 import pandas as pd
 import requests
@@ -10,12 +11,23 @@ class MarketDataClient:
         pass
         
     def get_broad_market_data(self):
+        broad_market = {
+            'Global Equities': 'ACWI',
+            'U.S. Total Equity': 'VTI',
+            'U.S. Large Cap': 'SPY',
+            'International ex-U.S.': 'VXUS',
+            'Emerging Markets': 'IEMG',
+            'U.S. Aggregate Bonds': 'AGG',
+            'Global Bonds': 'BNDW',
+            'Broad Commodities': 'DBC',
+            'Gold': 'GLD',
+            'Crypto (Bitcoin)': 'BTC-USD',
+            'U.S. Real Estate': 'VNQ',
+            'U.S. Dollar Index': 'DX-Y.NYB'
+        }
         return {
-            'Commodities': yf.Ticker('DBC').history(period='max', interval='1d'),
-            'Stock Market'     : yf.Ticker('SPY').history(period='max', interval='1d'),
-            'Bonds'      : yf.Ticker('AGG').history(period='max', interval='1d'),
-            'Crypto'     : yf.Ticker('BLOK').history(period='max', interval='1d'),
-            'International': yf.Ticker('EFA').history(period='max', interval='1d')
+            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            for name, ticker in broad_market.items()
         }
     
     def get_major_equity_indices_data(self):
@@ -310,23 +322,31 @@ class MarketDataClient:
             for name, ticker in forex_data.items()
         }
     
-    def get_world_data(self):
+    def _get_broad_region_map(self):
         return {
-            'Global': yf.Ticker('ACWI').history(period='max', interval='1d'),
-            'North America': yf.Ticker('IXN').history(period='max', interval='1d'),
-            'Europe': yf.Ticker('IEUR').history(period='max', interval='1d'),
-            'Asia Pacific (ex-Japan)': yf.Ticker('AAXJ').history(period='max', interval='1d'),
-            'Japan': yf.Ticker('EWJ').history(period='max', interval='1d'),
-            'Latin America': yf.Ticker('ILF').history(period='max', interval='1d'),
-            'Middle East': yf.Ticker('MESL').history(period='max', interval='1d'),
-            'Africa': yf.Ticker('AFK').history(period='max', interval='1d'),
-            'Emerging Markets': yf.Ticker('EEM').history(period='max', interval='1d'),
-            'Developed Markets': yf.Ticker('EFA').history(period='max', interval='1d'),
-            'Frontier Markets': yf.Ticker('FM').history(period='max', interval='1d')
+            'Global': 'ACWI',
+            'North America (U.S. proxy)': 'VTI',
+            'Europe': 'IEUR',
+            'Pacific ex-Japan': 'EPP',
+            'Japan': 'EWJ',
+            'Latin America': 'ILF',
+            'Middle East (Saudi proxy)': 'KSA',
+            'Africa': 'AFK',
+            'Emerging Markets': 'EEM',
+            'Developed Markets': 'EFA',
+            'Frontier Markets': 'FM'
+        }
+
+    def get_world_data(self):
+        region_data = self._get_broad_region_map()
+        return {
+            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            for name, ticker in region_data.items()
         }
 
     def get_region_data(self, region):
-        if region == 'Asia Pacific':
+        # Keep "Asia Pacific" as an alias so older notebooks continue to work.
+        if region in ('APAC', 'Asia Pacific'):
             region_data = {
                 'China': 'MCHI',
                 'India': 'INDA',
@@ -537,19 +557,7 @@ class MarketDataClient:
                 'Africa Ex South Africa': 'AFK'
             }
         elif region == 'Broad':
-            region_data = {
-                'Global': 'ACWI',                  
-                'North America': 'VTI',            # Total US; add EWC for Canada if needed
-                'Europe': 'IEUR',                   
-                'Asia Pacific (ex-Japan)': 'AAXJ',  
-                'Japan': 'EWJ',                      
-                'Latin America': 'ILF',              
-                'Middle East': 'MXF',               # check actual ETF coverage
-                'Africa': 'AFK',                      
-                'Emerging Markets': 'EEM',            
-                'Developed Markets': 'EFA',           
-                'Frontier Markets': 'FM'              
-            }
+            region_data = self._get_broad_region_map()
 
         return {
             name: yf.Ticker(ticker).history(period='max', interval='1d')
@@ -597,8 +605,9 @@ class MarketDataClient:
         market_assets = {
             #ADD MIDCAP AND SMALL CAP AND EQUAL WEIGHTED ETFs
             "INDICES": ['SPY', 'QQQ', 'DIA', 'IWM','RSP','MDY','IJR'],
+            "CORE_MACRO": ['ACWI', 'VTI', 'SPY', 'VXUS', 'IEMG', 'AGG', 'BNDW', 'DBC', 'GLD', 'BTC-USD', 'VNQ', 'DX-Y.NYB'],
             "SECTORS": ['XLF', 'XLK', 'XLV', 'XLC', 'XLI', 'XLU', 'XLB', 'VNQ', 'XLP', 'XLY', 'XBI', 'XLE'],
-            "INDUSTRIES": ['SPY', 'SMH', 'KRE', 'KIE', 'KBE', 'IAK','JETS','XHB','ITA'],
+            "INDUSTRIES": ['SPY', 'SMH', 'KRE', 'KIE', 'KBE', 'IAK','JETS','XHB','ITA','IGV'],
             "MID_CAP_SECTORS": ['IJH', 'IJK', 'IJH', 'IYF', 'IYH', 'IYZ', 'IYT', 'IYW', 'IYR', 'IYC', 'IYJ', 'IYE'],
             "SPY_HOLDINGS": sp500_table['Symbol'].tolist(),
         #    "QQQ_HOLDINGS": qqq_table['Symbol'].tolist(),
@@ -644,57 +653,95 @@ class MarketDataClient:
         }
 
         return market_assets
-    
     def retrieve_market_tables(self):
+        def read_tables(url):
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            return pd.read_html(StringIO(response.text))
+
+        def find_table(tables, required_columns=None, column_prefixes=None, table_name="table"):
+            required_columns = required_columns or []
+            column_prefixes = column_prefixes or []
+
+            for table in tables:
+                table_columns = [str(column) for column in table.columns]
+                has_required_columns = all(column in table_columns for column in required_columns)
+                has_prefixed_columns = all(
+                    any(column.startswith(prefix) for column in table_columns)
+                    for prefix in column_prefixes
+                )
+
+                if has_required_columns and has_prefixed_columns:
+                    return table.copy()
+
+            expected_columns = required_columns + [f"{prefix}*" for prefix in column_prefixes]
+            raise ValueError(f"Could not find {table_name} with columns: {expected_columns}")
+
         # URLs for the market data
         sp500_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         dow_url = 'https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average'
         nasdaq_url = 'https://en.wikipedia.org/wiki/NASDAQ-100'
         russell_1000_url = 'https://en.wikipedia.org/wiki/Russell_1000_Index'
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(sp500_url, headers=headers)
-        
-        
-        # Retrieve S&P 500 data KEEP THIS THIS SHIFT THIS SHIT ARROUND TOO MUCH
-        #--------------------------------------------------------------------------------------------
-        #sp500_table = pd.read_html(response.text)[0] 
-        sp500_table = pd.read_html(response.text)[0]
-        #--------------------------------------------------------------------------------------------
-        
+
+        sp500_tables = read_tables(sp500_url)
+        sp500_table = find_table(
+            sp500_tables,
+            required_columns=['Symbol', 'GICS Sector', 'GICS Sub-Industry'],
+            table_name='S&P 500 holdings table'
+        )
         sp500_table = sp500_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
         sp500_table = sp500_table.rename(columns={'GICS Sector': 'Sector', 'GICS Sub-Industry': 'Sub-Industry'})
 
         # Retrieve NASDAQ 100 data
-
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(nasdaq_url, headers=headers)
-        
-        qqq_table = pd.read_html(response.text)[4]
-
-        # Retrieve qqq data KEEP THIS THIS SHIFT THIS SHIT AROUND TOO MUCH
-        #------------------------------------------------------------------------------------
-        #qqq_table = qqq_table[['Ticker','Company','ICB Sector', 'ICB Industry']]
-        #qqq_table = qqq_table.rename(columns={'Ticker': 'Symbol', 'ICB Sector': 'Sector', 'ICB Industry': 'Sub-Industry'})
-        print(qqq_table.columns)
-        qqq_table = qqq_table[['Ticker','Company','ICB Industry[14]', 'ICB Subsector[14]']]
-        qqq_table = qqq_table.rename(columns={'Ticker': 'Symbol', 'ICB Industry[14]': 'Sector', 'ICB Subsector[14]': 'Sub-Industry'})
-        #------------------------------------------------------------------------------------
+        nasdaq_tables = read_tables(nasdaq_url)
+        try:
+            qqq_table = find_table(
+                nasdaq_tables,
+                required_columns=['Ticker', 'Company'],
+                column_prefixes=['ICB Industry', 'ICB Subsector'],
+                table_name='NASDAQ-100 holdings table'
+            )
+            nasdaq_sector_column = next(column for column in qqq_table.columns if str(column).startswith('ICB Industry'))
+            nasdaq_subsector_column = next(column for column in qqq_table.columns if str(column).startswith('ICB Subsector'))
+        except ValueError:
+            qqq_table = find_table(
+                nasdaq_tables,
+                required_columns=['Ticker', 'Company', 'ICB Sector', 'ICB Industry'],
+                table_name='NASDAQ-100 holdings table'
+            )
+            nasdaq_sector_column = 'ICB Sector'
+            nasdaq_subsector_column = 'ICB Industry'
+        qqq_table = qqq_table[['Ticker', 'Company', nasdaq_sector_column, nasdaq_subsector_column]]
+        qqq_table = qqq_table.rename(columns={'Ticker': 'Symbol', nasdaq_sector_column: 'Sector', nasdaq_subsector_column: 'Sub-Industry'})
         
         # Retrieve Dow Jones Industrial Average data
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(dow_url, headers=headers)
-        tables = pd.read_html(response.text)
-        dia_table = tables[2]
-        dia_table = dia_table[['Symbol', 'Industry']]
-        dia_table = pd.merge(dia_table, sp500_table[['Symbol', 'Sector']], on='Symbol', how='left')
+        dow_tables = read_tables(dow_url)
+        try:
+            dia_table = find_table(
+                dow_tables,
+                required_columns=['Symbol', 'Sector'],
+                table_name='Dow Jones holdings table'
+            )
+            dia_sector_column = 'Sector'
+        except ValueError:
+            dia_table = find_table(
+                dow_tables,
+                required_columns=['Symbol', 'Industry'],
+                table_name='Dow Jones holdings table'
+            )
+            dia_sector_column = 'Industry'
+        dia_table = dia_table[['Symbol', dia_sector_column]]
+        dia_table = dia_table.rename(columns={dia_sector_column: 'Sector'})
         dia_table = pd.merge(dia_table, sp500_table[['Symbol', 'Sub-Industry']], on='Symbol', how='left')
-        dia_table = dia_table.drop(columns=['Industry'])
 
         # Retrieve Russell 1000 data
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(russell_1000_url, headers=headers)
-        tables = pd.read_html(response.text)
-        russell_1000_table = tables[3]
+        russell_tables = read_tables(russell_1000_url)
+        russell_1000_table = find_table(
+            russell_tables,
+            required_columns=['Symbol', 'GICS Sector', 'GICS Sub-Industry'],
+            table_name='Russell 1000 holdings table'
+        )
         russell_1000_table = russell_1000_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
         russell_1000_table = russell_1000_table.rename(columns={'GICS Sector': 'Sector', 'GICS Sub-Industry': 'Sub-Industry'})
 

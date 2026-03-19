@@ -1350,7 +1350,10 @@ class Plotter:
         # Define a function to determine cell color based on z-score value and column type
         def get_cell_color(value, column_name):
             if pd.isna(value):
-                return 'white'
+                return '#1f1f1f'
+
+            if "Correlation" in column_name:
+                return '#1f1f1f'
             
             # Check if this is a "Benchmark Minus ETF" column (inverse coloring logic)
             if "Benchmark Minus ETF" in column_name:
@@ -1360,7 +1363,7 @@ class Plotter:
                 elif value < -0.5:
                     return 'lightcoral'
                 else:
-                    return 'white'
+                    return '#1f1f1f'
             else:
                 # For regular sortino columns: red for above 1, green for below -0.5
                 if value > 1:
@@ -1368,24 +1371,33 @@ class Plotter:
                 elif value < -0.5:
                     return 'lightgreen'
                 else:
-                    return 'white'
+                    return '#1f1f1f'
+
+        def get_display_values(df):
+            return [
+                df.index.tolist(),
+                *[
+                    ['N/A' if pd.isna(value) else f'{value:.2f}' for value in df[col]]
+                    for col in columns
+                ]
+            ]
         
         table = go.Table(
             header=dict(
                 values=['Ticker'] + columns,
-                fill_color='paleturquoise',
+                fill_color='#203040',
                 align='center',
-                font=dict(size=12)
+                font=dict(size=12, color='white')
             ),
             cells=dict(
-                values=[sorted_df.index] + [sorted_df[col] for col in columns],
+                values=get_display_values(sorted_df),
                 fill_color=[
-                    'lightgrey',  # Ticker column color
+                    '#2b2b2b',  # Ticker column color
                     # For each data column, color cells based on value and column name
                     *[[get_cell_color(val, col) for val in sorted_df[col]] for col in columns]
                 ],
                 align='center',
-                format=[None] + ['.2f'] * len(columns)  # Format numbers to 2 decimal places
+                font=dict(color='white')
             )
         )
         
@@ -1399,11 +1411,10 @@ class Plotter:
             buttons.append(dict(
                 args=[{
                     'cells': {
-                        'values': [z_score_combined.sort_values(by=col, ascending=True).index] + 
-                                [z_score_combined.sort_values(by=col, ascending=True)[c] for c in columns],
+                        'values': get_display_values(z_score_combined.sort_values(by=col, ascending=True)),
                         'fill': {
                             'color': [
-                                'lightgrey',  # Ticker column color
+                                '#2b2b2b',  # Ticker column color
                                 # For each data column, color cells based on value and column name
                                 *[[get_cell_color(val, c) for val in z_score_combined.sort_values(by=col, ascending=True)[c]] for c in columns]
                             ]
@@ -1426,7 +1437,10 @@ class Plotter:
                 'xanchor': 'left',
                 'yanchor': 'top'
             }],
-            template='plotly_white',
+            template='plotly_dark',
+            paper_bgcolor='#111111',
+            plot_bgcolor='#111111',
+            autosize=True,
             height=600,
             margin=dict(l=10, r=10, t=100, b=10)  # Increased top margin for dropdown
         )
@@ -1448,9 +1462,9 @@ class Plotter:
             x=1.0, y=1.2,
             xanchor='right',
             yanchor='top',
-            font=dict(size=10),
-            bgcolor="rgba(255,255,255,0.8)",
-            bordercolor="black",
+            font=dict(size=10, color='white'),
+            bgcolor="rgba(17,17,17,0.9)",
+            bordercolor="#444444",
             borderwidth=1
         )
         
