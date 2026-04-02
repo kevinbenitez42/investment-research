@@ -408,15 +408,37 @@ class RiskRelativeAnalytics:
 
         return spread_df
 
-    def build_term_config_map(self, asset_sharpe_map, asset_sortino_map, time_frame_map):
+    def build_term_config_map(
+        self,
+        asset_sharpe_map,
+        asset_sortino_map,
+        time_frame_map,
+        asset_sortino_sharpe_spread_map=None,
+    ):
         """Build plotting config map keyed as '<window>-day'."""
         tf_map = self._coerce_time_frame_map(time_frame_map)
+        spread_map = asset_sortino_sharpe_spread_map or self.compute_ratio_spread_map(
+            asset_sortino_map,
+            asset_sharpe_map,
+        )
         term_config_map = {}
         for term, window in tf_map.items():
             label = f"{window}-day"
+            sharpe = asset_sharpe_map[term]
+            sortino = asset_sortino_map[term]
+            spread = spread_map.get(term, pd.Series(dtype=float))
+            sharpe_clean = sharpe.dropna()
+            sortino_clean = sortino.dropna()
+            spread_clean = spread.dropna()
             term_config_map[label] = {
-                "sharpe": asset_sharpe_map[term],
-                "sortino": asset_sortino_map[term],
+                "sharpe": sharpe,
+                "sortino": sortino,
+                "spread": spread,
+                "sharpe_zscore": calculate_zscore(sharpe_clean).dropna() if not sharpe_clean.empty else pd.Series(dtype=float),
+                "sortino_zscore": calculate_zscore(sortino_clean).dropna()
+                if not sortino_clean.empty
+                else pd.Series(dtype=float),
+                "spread_zscore": calculate_zscore(spread_clean).dropna() if not spread_clean.empty else pd.Series(dtype=float),
                 "time_frame": window,
                 "term_key": term,
             }
@@ -443,7 +465,7 @@ class RiskRelativeAnalytics:
             time_frame_map=tf_map,
             risk_free_rate=risk_free_rate,
         )
-        sharpe_sortino_spread_map = self.compute_ratio_spread_map(asset_sharpe_map, asset_sortino_map)
+        sortino_sharpe_spread_map = self.compute_ratio_spread_map(asset_sortino_map, asset_sharpe_map)
         benchmark_metrics = self.compute_benchmark_metrics(
             analytics=analytics,
             benchmark_data=benchmark_data,
@@ -462,12 +484,18 @@ class RiskRelativeAnalytics:
             "asset_sharpe_map": asset_sharpe_map,
             "asset_component_map": asset_component_map,
             "asset_sortino_map": asset_sortino_map,
-            "asset_sharpe_sortino_spread_map": sharpe_sortino_spread_map,
+            "asset_sharpe_sortino_spread_map": sortino_sharpe_spread_map,
+            "asset_sortino_sharpe_spread_map": sortino_sharpe_spread_map,
             "benchmark_metrics": benchmark_metrics,
             "benchmark_order": benchmark_order,
             "default_benchmark": benchmark_order[0] if benchmark_order else None,
             "spread_plot_data": spread_plot_data,
-            "term_config_map": self.build_term_config_map(asset_sharpe_map, asset_sortino_map, tf_map),
+            "term_config_map": self.build_term_config_map(
+                asset_sharpe_map,
+                asset_sortino_map,
+                tf_map,
+                asset_sortino_sharpe_spread_map=sortino_sharpe_spread_map,
+            ),
         }
 
     def build_benchmark_plot_payload(

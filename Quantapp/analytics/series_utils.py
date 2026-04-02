@@ -80,6 +80,65 @@ def calculate_window_metrics(daily_returns: pd.Series, close_series: pd.Series, 
     }
 
 
+def calculate_historical_var_metrics(daily_returns: pd.Series, window: int, alpha: float):
+    """Compute rolling historical VaR / CVaR (Expected Shortfall) metrics for a return series."""
+    if window <= 0:
+        raise ValueError("window must be a positive integer.")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be between 0 and 1.")
+
+    returns = pd.Series(daily_returns).dropna().sort_index()
+    if returns.empty:
+        return {
+            "daily_returns": returns,
+            "var_threshold": pd.Series(dtype=float),
+            "expected_shortfall_threshold": pd.Series(dtype=float),
+            "var": pd.Series(dtype=float),
+            "expected_shortfall": pd.Series(dtype=float),
+            "breaches": pd.Series(dtype=float),
+            "rolling_breach_rate": pd.Series(dtype=float),
+            "expected_breach_rate": pd.Series(dtype=float),
+        }
+
+    def tail_mean(window_values):
+        values = np.asarray(window_values, dtype=float)
+        values = values[~np.isnan(values)]
+        if values.size == 0:
+            return np.nan
+
+        cutoff = np.quantile(values, alpha)
+        tail_values = values[values <= cutoff]
+        if tail_values.size == 0:
+            return cutoff
+        return tail_values.mean()
+
+    var_threshold = returns.rolling(window).quantile(alpha).dropna()
+    expected_shortfall_threshold = returns.rolling(window).apply(tail_mean, raw=True).dropna()
+
+    aligned_returns = returns.reindex(var_threshold.index)
+    breaches = aligned_returns.lt(var_threshold).astype(float)
+    rolling_breach_rate = breaches.rolling(window).mean().dropna()
+
+    expected_breach_rate = pd.Series(
+        data=np.full(len(rolling_breach_rate.index), alpha, dtype=float),
+        index=rolling_breach_rate.index,
+    )
+
+    var_loss = (-var_threshold).clip(lower=0)
+    expected_shortfall_loss = (-expected_shortfall_threshold).clip(lower=0)
+
+    return {
+        "daily_returns": returns.copy(),
+        "var_threshold": var_threshold,
+        "expected_shortfall_threshold": expected_shortfall_threshold,
+        "var": var_loss,
+        "expected_shortfall": expected_shortfall_loss,
+        "breaches": breaches,
+        "rolling_breach_rate": rolling_breach_rate,
+        "expected_breach_rate": expected_breach_rate,
+    }
+
+
 def zscore(series: pd.Series) -> pd.Series:
     """Alias for compatibility with older notebook code."""
     return calculate_zscore(series)

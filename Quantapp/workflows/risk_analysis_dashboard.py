@@ -152,6 +152,7 @@ def build_risk_analysis_dashboard_payload(config: RiskAnalysisConfig) -> dict[st
         ticker_str=ticker_str,
         momentum_analytics=momentum_analytics,
         line_chart_plotter=line_chart_plotter,
+        risk_free_daily_rate=risk_free_daily_rate,
     )
     sections.append({"id": "momentum", "label": "Momentum", "notes": [], "cards": momentum_cards})
 
@@ -328,6 +329,7 @@ def _build_momentum_cards(
     ticker_str: str,
     momentum_analytics: MomentumAnalytics,
     line_chart_plotter: LineChartPlotter,
+    risk_free_daily_rate: pd.Series,
 ) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
 
@@ -336,6 +338,7 @@ def _build_momentum_cards(
         window_sizes=list(range(3, 201)),
         highlight_windows=(7, 21, 50, 200),
         surface_years=10,
+        risk_free_rate=risk_free_daily_rate,
     )
     momentum_diagnostic_figs = line_chart_plotter.plot_momentum_window_diagnostics(
         diagnostics_context=momentum_diagnostics_context,
@@ -526,6 +529,10 @@ def _build_treasury_cards(
     interval: str,
     length_of_plots: int,
     helper: Helper,
+    comparison_windows: list[int] | None = None,
+    include_curve_comparison: bool = True,
+    include_historical_yields: bool = True,
+    include_deannualized_curves: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     warnings: list[str] = []
     notes: list[str] = []
@@ -676,6 +683,33 @@ def _build_treasury_cards(
             "labels": labels,
         }
 
+    def interpolate_curve_yield(curve_series, target_years):
+        if curve_series is None or curve_series.empty:
+            return np.nan
+        valid_curve = curve_series.dropna()
+        if valid_curve.empty:
+            return np.nan
+        x_values = np.array([maturity_to_years[maturity] for maturity in valid_curve.index], dtype=float)
+        y_values = valid_curve.values.astype(float)
+        sort_order = np.argsort(x_values)
+        x_values = x_values[sort_order]
+        y_values = y_values[sort_order]
+        if len(x_values) == 1:
+            return float(y_values[0])
+        if target_years <= float(x_values.min()):
+            return float(y_values[0])
+        if target_years >= float(x_values.max()):
+            return float(y_values[-1])
+        interpolator = PchipInterpolator(x_values, y_values)
+        interpolated_value = interpolator(float(target_years))
+        return float(interpolated_value)
+
+    def annualized_yield_to_holding_period_return(yield_pct, years):
+        if pd.isna(yield_pct):
+            return np.nan
+        yield_decimal = yield_pct / 100
+        return (((1 + yield_decimal) ** years) - 1) * 100
+
     def build_historical_excess_return_series(price_series, treasury_frame, maturity):
         treasury_locked_yield_series = treasury_frame[maturity].ffill().dropna()
         if treasury_locked_yield_series.empty:
@@ -709,30 +743,97 @@ def _build_treasury_cards(
             pd.Series(annualized_excess_values, index=valid_dates, dtype=float),
         )
 
-    latest_hold_to_maturity_curve = pd.Series(
-        {maturity: deannualize_treasury_yield(latest_curve[maturity], maturity) for maturity in latest_curve.index}
-    )
+    def build_window_locked_treasury_excess_frame(price_series, treasury_frame, window_days):
+        if price_series is None or price_series.empty or len(price_series) <= window_days:
+            return pd.DataFrame()
+        years = window_days / 252
+        result_rows = []
+        result_dates = []
+        price_index = price_series.index
+        for end_idx in range(window_days, len(price_series)):
+            end_date = price_index[end_idx]
+            start_date = price_index[end_idx - window_days]
+            start_price = price_series.iloc[end_idx - window_days]
+            end_price = price_series.iloc[end_idx]
+            if start_price <= 0 or end_price <= 0:
+                continue
+            treasury_history = treasury_frame.loc[:start_date].ffill().dropna(how="all")
+            if treasury_history.empty:
+                continue
+            locked_curve = treasury_history.iloc[-1].dropna()
+            locked_yield = interpolate_curve_yield(locked_curve, years)
+            if pd.isna(locked_yield):
+                continue
+            asset_return = ((end_price / start_price) - 1) * 100
+            treasury_return = annualized_yield_to_holding_period_return(locked_yield, years)
+            result_rows.append(
+                {
+                    "asset_return": asset_return,
+                    "treasury_return": treasury_return,
+                    "spread": asset_return - treasury_return,
+                    "locked_yield": locked_yield,
+                }
+            )
+            result_dates.append(end_date)
+        if not result_rows:
+            return pd.DataFrame()
+        return pd.DataFrame(result_rows, index=result_dates, dtype=float)
+
+    def locked_treasury_yield(treasury_frame, end_date, maturity):
+        treasury_locked_yield_series = treasury_frame[maturity].ffill().dropna()
+        if treasury_locked_yield_series.empty:
+            return np.nan
+        start_target = end_date - maturity_date_offsets[maturity]
+        start_yield_series = treasury_locked_yield_series.loc[:start_target]
+        if start_yield_series.empty:
+            return np.nan
+        return float(start_yield_series.iloc[-1])
+
+    def locked_treasury_holding_period_return(treasury_frame, end_date, maturity):
+        locked_yield = locked_treasury_yield(treasury_frame, end_date, maturity)
+        if pd.isna(locked_yield):
+            return np.nan
+        return deannualize_treasury_yield(locked_yield, maturity)
+
+    ex_post_annualized_treasury_curve = pd.Series(
+        {maturity: locked_treasury_yield(latest_curve_frame, latest_curve_date, maturity) for maturity in latest_curve.index}
+    ).dropna()
+    ex_post_holding_treasury_curve = pd.Series(
+        {
+            maturity: locked_treasury_holding_period_return(latest_curve_frame, latest_curve_date, maturity)
+            for maturity in latest_curve.index
+        }
+    ).dropna()
+    ex_post_annualized_positions = [curve_tick_text.index(maturity) for maturity in ex_post_annualized_treasury_curve.index]
+    ex_post_holding_positions = [curve_tick_text.index(maturity) for maturity in ex_post_holding_treasury_curve.index]
+
     asset_annualized_curve = pd.Series(
         {maturity: annualize_asset_return(asset_close, latest_curve_date, maturity) for maturity in latest_curve.index}
     ).dropna()
-    asset_holding_period_curve = pd.Series(
-        {maturity: holding_period_asset_return(asset_close, latest_curve_date, maturity) for maturity in latest_curve.index}
-    ).dropna()
+    asset_annualized_curve = asset_annualized_curve.loc[
+        asset_annualized_curve.index.intersection(ex_post_annualized_treasury_curve.index)
+    ]
     annualized_asset_curve_positions = [curve_tick_text.index(maturity) for maturity in asset_annualized_curve.index]
-    annualized_excess_curve = asset_annualized_curve - latest_curve.loc[asset_annualized_curve.index]
+    annualized_excess_curve = asset_annualized_curve - ex_post_annualized_treasury_curve.loc[asset_annualized_curve.index]
     annualized_gap_x, annualized_gap_y = [], []
     for maturity in asset_annualized_curve.index:
         position = curve_tick_text.index(maturity)
         annualized_gap_x.extend([position, position, None])
-        annualized_gap_y.extend([latest_curve[maturity], asset_annualized_curve[maturity], None])
+        annualized_gap_y.extend([ex_post_annualized_treasury_curve[maturity], asset_annualized_curve[maturity], None])
 
+    asset_holding_period_curve = pd.Series(
+        {maturity: holding_period_asset_return(asset_close, latest_curve_date, maturity) for maturity in latest_curve.index}
+    ).dropna()
+    asset_holding_period_curve = asset_holding_period_curve.loc[
+        asset_holding_period_curve.index.intersection(ex_post_holding_treasury_curve.index)
+    ]
     asset_curve_positions = [curve_tick_text.index(maturity) for maturity in asset_holding_period_curve.index]
-    holding_period_excess_curve = asset_holding_period_curve - latest_hold_to_maturity_curve.loc[asset_holding_period_curve.index]
+    holding_period_excess_curve = asset_holding_period_curve - ex_post_holding_treasury_curve.loc[asset_holding_period_curve.index]
     holding_period_gap_x, holding_period_gap_y = [], []
     for maturity in asset_holding_period_curve.index:
         position = curve_tick_text.index(maturity)
         holding_period_gap_x.extend([position, position, None])
-        holding_period_gap_y.extend([latest_hold_to_maturity_curve[maturity], asset_holding_period_curve[maturity], None])
+        holding_period_gap_y.extend([ex_post_holding_treasury_curve[maturity], asset_holding_period_curve[maturity], None])
 
     benchmark_curve_payloads = {}
     benchmark_color_sequence = ["#16a34a", "#9333ea", "#d97706", "#dc2626", "#0891b2", "#7c3aed"]
@@ -740,28 +841,34 @@ def _build_treasury_cards(
         benchmark_annualized_curve = pd.Series(
             {maturity: annualize_asset_return(benchmark_close, latest_curve_date, maturity) for maturity in latest_curve.index}
         ).dropna()
+        benchmark_annualized_curve = benchmark_annualized_curve.loc[
+            benchmark_annualized_curve.index.intersection(ex_post_annualized_treasury_curve.index)
+        ]
         benchmark_holding_curve = pd.Series(
             {maturity: holding_period_asset_return(benchmark_close, latest_curve_date, maturity) for maturity in latest_curve.index}
         ).dropna()
+        benchmark_holding_curve = benchmark_holding_curve.loc[
+            benchmark_holding_curve.index.intersection(ex_post_holding_treasury_curve.index)
+        ]
         benchmark_curve_payloads[benchmark_symbol] = {
             "color": benchmark_color_sequence[idx % len(benchmark_color_sequence)],
             "annualized_curve": benchmark_annualized_curve,
             "annualized_positions": [curve_tick_text.index(maturity) for maturity in benchmark_annualized_curve.index],
-            "annualized_excess_curve": benchmark_annualized_curve - latest_curve.loc[benchmark_annualized_curve.index],
+            "annualized_excess_curve": benchmark_annualized_curve - ex_post_annualized_treasury_curve.loc[benchmark_annualized_curve.index],
             "holding_curve": benchmark_holding_curve,
             "holding_positions": [curve_tick_text.index(maturity) for maturity in benchmark_holding_curve.index],
-            "holding_excess_curve": benchmark_holding_curve - latest_hold_to_maturity_curve.loc[benchmark_holding_curve.index],
+            "holding_excess_curve": benchmark_holding_curve - ex_post_holding_treasury_curve.loc[benchmark_holding_curve.index],
         }
 
-    annualized_curve_interp = build_interpolated_curve_data(latest_curve)
-    deannualized_curve_interp = build_interpolated_curve_data(latest_hold_to_maturity_curve)
+    annualized_curve_interp = build_interpolated_curve_data(ex_post_annualized_treasury_curve)
+    deannualized_curve_interp = build_interpolated_curve_data(ex_post_holding_treasury_curve)
     asset_annualized_curve_interp = build_interpolated_curve_data(asset_annualized_curve)
     asset_holding_curve_interp = build_interpolated_curve_data(asset_holding_period_curve)
     for benchmark_payload in benchmark_curve_payloads.values():
         benchmark_payload["annualized_interp"] = build_interpolated_curve_data(benchmark_payload["annualized_curve"])
         benchmark_payload["holding_interp"] = build_interpolated_curve_data(benchmark_payload["holding_curve"])
 
-    annualized_label_ceiling = latest_curve.max()
+    annualized_label_ceiling = ex_post_annualized_treasury_curve.max()
     if not asset_annualized_curve.empty:
         annualized_label_ceiling = max(annualized_label_ceiling, asset_annualized_curve.max())
     for benchmark_payload in benchmark_curve_payloads.values():
@@ -769,7 +876,7 @@ def _build_treasury_cards(
             annualized_label_ceiling = max(annualized_label_ceiling, benchmark_payload["annualized_curve"].max())
     annualized_label_y = annualized_label_ceiling * 0.96
 
-    deannualized_label_ceiling = latest_hold_to_maturity_curve.max()
+    deannualized_label_ceiling = ex_post_holding_treasury_curve.max()
     if not asset_holding_period_curve.empty:
         deannualized_label_ceiling = max(deannualized_label_ceiling, asset_holding_period_curve.max())
     for benchmark_payload in benchmark_curve_payloads.values():
@@ -779,46 +886,122 @@ def _build_treasury_cards(
 
     historical_excess_maturities = [maturity for maturity in ["3M", "1Y", "5Y", "10Y", "30Y"] if maturity in ordered_maturities]
     curve_overlay_label = f"{ticker_str} + Benchmarks" if benchmark_curve_payloads else ticker_str
+    annualized_curve_title = f"Ex Post Annualized Treasury Hurdle vs {curve_overlay_label} ({latest_curve_date:%Y-%m-%d})"
+    annualized_interp_title = f"Interpolated Ex Post Annualized Curves ({latest_curve_date:%Y-%m-%d})"
+    holding_curve_title = f"Ex Post Treasury Holding Return vs {curve_overlay_label} ({latest_curve_date:%Y-%m-%d})"
+    holding_interp_title = f"Interpolated Ex Post Holding-Period Curves ({latest_curve_date:%Y-%m-%d})"
 
-    treasury_fig = make_subplots(
-        rows=3,
-        cols=2,
-        specs=[[{"colspan": 2}, None], [{}, {}], [{}, {}]],
-        row_heights=[0.44, 0.28, 0.28],
-        horizontal_spacing=0.08,
-        vertical_spacing=0.1,
-        subplot_titles=(
-            "Historical Treasury Yields",
-            f"Annualized Yield Curve vs {curve_overlay_label} ({latest_curve_date:%Y-%m-%d})",
-            f"De-Annualized Yield Curve vs {curve_overlay_label} ({latest_curve_date:%Y-%m-%d})",
-            f"Interpolated Annualized Curves ({latest_curve_date:%Y-%m-%d})",
-            f"Interpolated De-Annualized Curves ({latest_curve_date:%Y-%m-%d})",
-        ),
-    )
-
-    for maturity in ordered_maturities:
-        series = treasury_yields[maturity].dropna()
-        if series.empty:
-            continue
-        treasury_fig.add_trace(
-            go.Scatter(x=series.index, y=series, mode="lines", name=maturity, line=dict(width=1.6)),
-            row=1,
-            col=1,
+    if include_historical_yields and include_deannualized_curves:
+        treasury_fig = make_subplots(
+            rows=3,
+            cols=2,
+            specs=[[{"colspan": 2}, None], [{}, {}], [{}, {}]],
+            row_heights=[0.44, 0.28, 0.28],
+            horizontal_spacing=0.08,
+            vertical_spacing=0.1,
+            subplot_titles=(
+                "Historical Treasury Yields",
+                annualized_curve_title,
+                holding_curve_title,
+                annualized_interp_title,
+                holding_interp_title,
+            ),
         )
+        historical_panel = (1, 1)
+        annualized_panel = (2, 1)
+        holding_panel = (2, 2)
+        annualized_interp_panel = (3, 1)
+        holding_interp_panel = (3, 2)
+        figure_height = 1450
+        figure_title = "US Treasury Yield History with Ex Post Matched-Horizon Return Overlays"
+    elif include_historical_yields:
+        treasury_fig = make_subplots(
+            rows=3,
+            cols=1,
+            row_heights=[0.44, 0.28, 0.28],
+            vertical_spacing=0.1,
+            subplot_titles=(
+                "Historical Treasury Yields",
+                annualized_curve_title,
+                annualized_interp_title,
+            ),
+        )
+        historical_panel = (1, 1)
+        annualized_panel = (2, 1)
+        holding_panel = None
+        annualized_interp_panel = (3, 1)
+        holding_interp_panel = None
+        figure_height = 1350
+        figure_title = "US Treasury Yield History with Ex Post Annualized Return Overlays"
+    elif include_deannualized_curves:
+        treasury_fig = make_subplots(
+            rows=2,
+            cols=2,
+            row_heights=[0.5, 0.5],
+            horizontal_spacing=0.08,
+            vertical_spacing=0.12,
+            subplot_titles=(
+                annualized_curve_title,
+                holding_curve_title,
+                annualized_interp_title,
+                holding_interp_title,
+            ),
+        )
+        historical_panel = None
+        annualized_panel = (1, 1)
+        holding_panel = (1, 2)
+        annualized_interp_panel = (2, 1)
+        holding_interp_panel = (2, 2)
+        figure_height = 1150
+        figure_title = "Ex Post Treasury Opportunity-Cost Curves"
+    else:
+        treasury_fig = make_subplots(
+            rows=2,
+            cols=1,
+            row_heights=[0.52, 0.48],
+            vertical_spacing=0.12,
+            subplot_titles=(
+                annualized_curve_title,
+                annualized_interp_title,
+            ),
+        )
+        historical_panel = None
+        annualized_panel = (1, 1)
+        holding_panel = None
+        annualized_interp_panel = (2, 1)
+        holding_interp_panel = None
+        figure_height = 980
+        figure_title = "Ex Post Annualized Treasury Opportunity-Cost Curves"
 
-    treasury_fig.add_trace(
-        go.Scatter(
-            x=curve_positions,
-            y=latest_curve.values.tolist(),
-            mode="lines+markers",
-            name="Latest Yield Curve",
-            line=dict(color="#0f172a", width=3),
-            marker=dict(size=9, color="#0f766e"),
-            showlegend=False,
-        ),
-        row=2,
-        col=1,
-    )
+    if historical_panel is not None:
+        historical_row, historical_col = historical_panel
+        for maturity in ordered_maturities:
+            series = treasury_yields[maturity].dropna()
+            if series.empty:
+                continue
+            treasury_fig.add_trace(
+                go.Scatter(x=series.index, y=series, mode="lines", name=maturity, line=dict(width=1.6)),
+                row=historical_row,
+                col=historical_col,
+            )
+
+    annualized_row, annualized_col = annualized_panel
+    if not ex_post_annualized_treasury_curve.empty:
+        treasury_fig.add_trace(
+            go.Scatter(
+                x=ex_post_annualized_positions,
+                y=ex_post_annualized_treasury_curve.values.tolist(),
+                mode="lines+markers",
+                name="Locked Treasury Yield (Ex Post)",
+                line=dict(color="#0f172a", width=3),
+                marker=dict(size=9, color="#0f766e"),
+                customdata=np.array(ex_post_annualized_treasury_curve.index),
+                hovertemplate="Maturity=%{customdata}<br>Locked Treasury annualized yield=%{y:.2f}%<extra></extra>",
+                showlegend=False,
+            ),
+            row=annualized_row,
+            col=annualized_col,
+        )
     if annualized_gap_x:
         treasury_fig.add_trace(
             go.Scatter(
@@ -830,8 +1013,8 @@ def _build_treasury_cards(
                 hoverinfo="skip",
                 showlegend=False,
             ),
-            row=2,
-            col=1,
+            row=annualized_row,
+            col=annualized_col,
         )
     if not asset_annualized_curve.empty:
         treasury_fig.add_trace(
@@ -843,10 +1026,10 @@ def _build_treasury_cards(
                 line=dict(color="#2563eb", width=3),
                 marker=dict(size=9, color="#1d4ed8", symbol="diamond"),
                 customdata=np.column_stack((asset_annualized_curve.index, annualized_excess_curve.values)),
-                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{ticker_str} annualized return=%{{y:.2f}}%<br>" + "Excess vs Treasury=%{customdata[1]:.2f}%<extra></extra>",
+                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{ticker_str} annualized return=%{{y:.2f}}%<br>" + "Excess vs locked Treasury=%{customdata[1]:.2f}%<extra></extra>",
             ),
-            row=2,
-            col=1,
+            row=annualized_row,
+            col=annualized_col,
         )
     for benchmark_symbol, benchmark_payload in benchmark_curve_payloads.items():
         if benchmark_payload["annualized_curve"].empty:
@@ -861,122 +1044,138 @@ def _build_treasury_cards(
                 line=dict(color=benchmark_payload["color"], width=2.4, dash="dash"),
                 marker=dict(size=8, color=benchmark_payload["color"], symbol="circle-open"),
                 customdata=np.column_stack((benchmark_payload["annualized_curve"].index, benchmark_payload["annualized_excess_curve"].values)),
-                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{benchmark_symbol} annualized return=%{{y:.2f}}%<br>" + "Excess vs Treasury=%{customdata[1]:.2f}%<extra></extra>",
+                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{benchmark_symbol} annualized return=%{{y:.2f}}%<br>" + "Excess vs locked Treasury=%{customdata[1]:.2f}%<extra></extra>",
             ),
-            row=2,
-            col=1,
+            row=annualized_row,
+            col=annualized_col,
         )
 
-    treasury_fig.add_trace(
-        go.Scatter(
-            x=curve_positions,
-            y=latest_hold_to_maturity_curve.values.tolist(),
-            mode="lines+markers",
-            name="De-Annualized Curve",
-            line=dict(color="#7c2d12", width=3),
-            marker=dict(size=9, color="#ea580c"),
-            showlegend=False,
-        ),
-        row=2,
-        col=2,
-    )
-    for benchmark_symbol, benchmark_payload in benchmark_curve_payloads.items():
-        if benchmark_payload["holding_curve"].empty:
-            continue
-        treasury_fig.add_trace(
-            go.Scatter(
-                x=benchmark_payload["holding_positions"],
-                y=benchmark_payload["holding_curve"].values.tolist(),
-                mode="lines+markers",
-                name=f"{benchmark_symbol} Holding-Period Return",
-                legendgroup=benchmark_symbol,
-                line=dict(color=benchmark_payload["color"], width=2.4, dash="dash"),
-                marker=dict(size=8, color=benchmark_payload["color"], symbol="circle-open"),
-                customdata=np.column_stack((benchmark_payload["holding_curve"].index, benchmark_payload["holding_excess_curve"].values)),
-                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{benchmark_symbol} holding-period return=%{{y:.2f}}%<br>" + "Excess vs Treasury=%{customdata[1]:.2f}%<extra></extra>",
-            ),
-            row=2,
-            col=2,
-        )
-    if holding_period_gap_x:
-        treasury_fig.add_trace(
-            go.Scatter(
-                x=holding_period_gap_x,
-                y=holding_period_gap_y,
-                mode="lines",
-                name="Holding-Period Excess Return Gap",
-                line=dict(color="rgba(37, 99, 235, 0.45)", width=2, dash="dot"),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=2,
-            col=2,
-        )
-    if not asset_holding_period_curve.empty:
-        treasury_fig.add_trace(
-            go.Scatter(
-                x=asset_curve_positions,
-                y=asset_holding_period_curve.values.tolist(),
-                mode="lines+markers",
-                name=f"{ticker_str} Holding-Period Return",
-                line=dict(color="#2563eb", width=3),
-                marker=dict(size=9, color="#1d4ed8", symbol="diamond"),
-                customdata=np.column_stack((asset_holding_period_curve.index, holding_period_excess_curve.values)),
-                hovertemplate="Maturity=%{customdata[0]}<br>" + f"{ticker_str} holding-period return=%{{y:.2f}}%<br>" + "Excess vs Treasury=%{customdata[1]:.2f}%<extra></extra>",
-            ),
-            row=2,
-            col=2,
-        )
-
+    annualized_interp_row, annualized_interp_col = annualized_interp_panel
     _add_interpolated_curve_traces(
         fig=treasury_fig,
-        row=3,
-        col=1,
+        row=annualized_interp_row,
+        col=annualized_interp_col,
         treasury_interp=annualized_curve_interp,
         asset_interp=asset_annualized_curve_interp,
         benchmark_payloads=benchmark_curve_payloads,
         benchmark_key="annualized_interp",
-        treasury_name="Interpolated Treasury Yield Curve",
-        treasury_hover="Maturity=%{text}<br>Treasury yield=%{y:.2f}%<extra></extra>",
+        treasury_name="Interpolated Locked Treasury Yield Curve",
+        treasury_hover="Maturity=%{text}<br>Locked Treasury annualized yield=%{y:.2f}%<extra></extra>",
         asset_label=ticker_str,
     )
-    _add_interpolated_curve_traces(
-        fig=treasury_fig,
-        row=3,
-        col=2,
-        treasury_interp=deannualized_curve_interp,
-        asset_interp=asset_holding_curve_interp,
-        benchmark_payloads=benchmark_curve_payloads,
-        benchmark_key="holding_interp",
-        treasury_name="Interpolated De-Annualized Curve",
-        treasury_hover="Maturity=%{text}<br>Treasury holding-period return=%{y:.2f}%<extra></extra>",
-        asset_label=ticker_str,
-        treasury_line_color="#7c2d12",
-        treasury_marker_color="#ea580c",
-    )
+
+    if holding_panel is not None:
+        holding_row, holding_col = holding_panel
+        if not ex_post_holding_treasury_curve.empty:
+            treasury_fig.add_trace(
+                go.Scatter(
+                    x=ex_post_holding_positions,
+                    y=ex_post_holding_treasury_curve.values.tolist(),
+                    mode="lines+markers",
+                    name="Locked Treasury Holding Return (Ex Post)",
+                    line=dict(color="#7c2d12", width=3),
+                    marker=dict(size=9, color="#ea580c"),
+                    customdata=np.array(ex_post_holding_treasury_curve.index),
+                    hovertemplate="Maturity=%{customdata}<br>Locked Treasury holding-period return=%{y:.2f}%<extra></extra>",
+                    showlegend=False,
+                ),
+                row=holding_row,
+                col=holding_col,
+            )
+        for benchmark_symbol, benchmark_payload in benchmark_curve_payloads.items():
+            if benchmark_payload["holding_curve"].empty:
+                continue
+            treasury_fig.add_trace(
+                go.Scatter(
+                    x=benchmark_payload["holding_positions"],
+                    y=benchmark_payload["holding_curve"].values.tolist(),
+                    mode="lines+markers",
+                    name=f"{benchmark_symbol} Holding-Period Return",
+                    legendgroup=benchmark_symbol,
+                    line=dict(color=benchmark_payload["color"], width=2.4, dash="dash"),
+                    marker=dict(size=8, color=benchmark_payload["color"], symbol="circle-open"),
+                    customdata=np.column_stack((benchmark_payload["holding_curve"].index, benchmark_payload["holding_excess_curve"].values)),
+                    hovertemplate="Maturity=%{customdata[0]}<br>" + f"{benchmark_symbol} holding-period return=%{{y:.2f}}%<br>" + "Excess vs locked Treasury=%{customdata[1]:.2f}%<extra></extra>",
+                ),
+                row=holding_row,
+                col=holding_col,
+            )
+        if holding_period_gap_x:
+            treasury_fig.add_trace(
+                go.Scatter(
+                    x=holding_period_gap_x,
+                    y=holding_period_gap_y,
+                    mode="lines",
+                    name="Holding-Period Excess Return Gap",
+                    line=dict(color="rgba(37, 99, 235, 0.45)", width=2, dash="dot"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                ),
+                row=holding_row,
+                col=holding_col,
+            )
+        if not asset_holding_period_curve.empty:
+            treasury_fig.add_trace(
+                go.Scatter(
+                    x=asset_curve_positions,
+                    y=asset_holding_period_curve.values.tolist(),
+                    mode="lines+markers",
+                    name=f"{ticker_str} Holding-Period Return",
+                    line=dict(color="#2563eb", width=3),
+                    marker=dict(size=9, color="#1d4ed8", symbol="diamond"),
+                    customdata=np.column_stack((asset_holding_period_curve.index, holding_period_excess_curve.values)),
+                    hovertemplate="Maturity=%{customdata[0]}<br>" + f"{ticker_str} holding-period return=%{{y:.2f}}%<br>" + "Excess vs locked Treasury=%{customdata[1]:.2f}%<extra></extra>",
+                ),
+                row=holding_row,
+                col=holding_col,
+            )
+
+    if holding_interp_panel is not None:
+        holding_interp_row, holding_interp_col = holding_interp_panel
+        _add_interpolated_curve_traces(
+            fig=treasury_fig,
+            row=holding_interp_row,
+            col=holding_interp_col,
+            treasury_interp=deannualized_curve_interp,
+            asset_interp=asset_holding_curve_interp,
+            benchmark_payloads=benchmark_curve_payloads,
+            benchmark_key="holding_interp",
+            treasury_name="Interpolated Locked Treasury Holding Curve",
+            treasury_hover="Maturity=%{text}<br>Locked Treasury holding-period return=%{y:.2f}%<extra></extra>",
+            asset_label=ticker_str,
+            treasury_line_color="#7c2d12",
+            treasury_marker_color="#ea580c",
+        )
 
     if bill_note_boundary is not None:
-        for row in (2, 3):
-            for col in (1, 2):
-                treasury_fig.add_vrect(
-                    x0=bill_note_boundary,
-                    x1=curve_region_end,
-                    fillcolor="rgba(148, 163, 184, 0.18)",
-                    line_width=0,
-                    row=row,
-                    col=col,
-                )
-
+        shaded_panels = [annualized_panel, annualized_interp_panel]
         label_specs = [
-            (2, 1, bill_region_mid, annualized_label_y, "Bills"),
-            (2, 1, note_bond_region_mid, annualized_label_y, "Notes/Bonds"),
-            (2, 2, bill_region_mid, deannualized_label_y, "Bills"),
-            (2, 2, note_bond_region_mid, deannualized_label_y, "Notes/Bonds"),
-            (3, 1, bill_region_mid, annualized_label_y, "Bills"),
-            (3, 1, note_bond_region_mid, annualized_label_y, "Notes/Bonds"),
-            (3, 2, bill_region_mid, deannualized_label_y, "Bills"),
-            (3, 2, note_bond_region_mid, deannualized_label_y, "Notes/Bonds"),
+            (*annualized_panel, bill_region_mid, annualized_label_y, "Bills"),
+            (*annualized_panel, note_bond_region_mid, annualized_label_y, "Notes/Bonds"),
+            (*annualized_interp_panel, bill_region_mid, annualized_label_y, "Bills"),
+            (*annualized_interp_panel, note_bond_region_mid, annualized_label_y, "Notes/Bonds"),
         ]
+        if holding_panel is not None and holding_interp_panel is not None:
+            shaded_panels.extend([holding_panel, holding_interp_panel])
+            label_specs.extend(
+                [
+                    (*holding_panel, bill_region_mid, deannualized_label_y, "Bills"),
+                    (*holding_panel, note_bond_region_mid, deannualized_label_y, "Notes/Bonds"),
+                    (*holding_interp_panel, bill_region_mid, deannualized_label_y, "Bills"),
+                    (*holding_interp_panel, note_bond_region_mid, deannualized_label_y, "Notes/Bonds"),
+                ]
+            )
+
+        for row, col in shaded_panels:
+            treasury_fig.add_vrect(
+                x0=bill_note_boundary,
+                x1=curve_region_end,
+                fillcolor="rgba(148, 163, 184, 0.18)",
+                line_width=0,
+                row=row,
+                col=col,
+            )
+
         for row, col, x, y, text in label_specs:
             treasury_fig.add_annotation(
                 x=x,
@@ -990,13 +1189,24 @@ def _build_treasury_cards(
                 col=col,
             )
 
-    treasury_fig.update_xaxes(title_text="Date", row=1, col=1)
-    for row, col, y_title in (
-        (2, 1, "Annualized Return / Yield (%)"),
-        (2, 2, "Holding-Period Return (%)"),
-        (3, 1, "Annualized Return / Yield (%)"),
-        (3, 2, "Holding-Period Return (%)"),
-    ):
+    if historical_panel is not None:
+        historical_row, historical_col = historical_panel
+        treasury_fig.update_xaxes(title_text="Date", row=historical_row, col=historical_col)
+        treasury_fig.update_yaxes(title_text="Yield (%)", row=historical_row, col=historical_col)
+
+    maturity_axis_specs = [
+        (*annualized_panel, "Annualized Return / Yield (%)"),
+        (*annualized_interp_panel, "Annualized Return / Yield (%)"),
+    ]
+    if holding_panel is not None and holding_interp_panel is not None:
+        maturity_axis_specs.extend(
+            [
+                (*holding_panel, "Holding-Period Return (%)"),
+                (*holding_interp_panel, "Holding-Period Return (%)"),
+            ]
+        )
+
+    for row, col, y_title in maturity_axis_specs:
         treasury_fig.update_xaxes(
             title_text="Maturity",
             tickmode="array",
@@ -1007,87 +1217,158 @@ def _build_treasury_cards(
             col=col,
         )
         treasury_fig.update_yaxes(title_text=y_title, row=row, col=col)
-    treasury_fig.update_yaxes(title_text="Yield (%)", row=1, col=1)
+
     treasury_fig.update_layout(
-        title=f"US Treasury Yield History with {curve_overlay_label} Matched-Horizon Return Overlays",
+        title=figure_title,
         template="plotly_white",
-        height=1450,
+        height=figure_height,
         legend_title_text="Series",
         hovermode="x unified",
     )
     cards.append({"title": "Treasury Curve Comparison", "figure": treasury_fig})
+    if not include_curve_comparison:
+        cards = [card for card in cards if card["title"] != "Treasury Curve Comparison"]
 
-    historical_holding_excess_map = {}
-    historical_annualized_excess_map = {}
-    historical_color_sequence = px.colors.qualitative.Bold
-    for maturity in historical_excess_maturities:
-        holding_excess_series, annualized_excess_series = build_historical_excess_return_series(
-            price_series=asset_close,
-            treasury_frame=latest_curve_frame,
-            maturity=maturity,
-        )
-        if not holding_excess_series.empty:
-            historical_holding_excess_map[maturity] = holding_excess_series
-        if not annualized_excess_series.empty:
-            historical_annualized_excess_map[maturity] = annualized_excess_series
-
-    if historical_holding_excess_map or historical_annualized_excess_map:
-        historical_excess_fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=(
-                f"{ticker_str} Historical Holding-Period Excess Return vs Locked Treasury",
-                f"{ticker_str} Historical Annualized Excess Return vs Locked Treasury",
-            ),
-        )
-        for idx, maturity in enumerate(historical_excess_maturities):
-            color = historical_color_sequence[idx % len(historical_color_sequence)]
-            holding_series = historical_holding_excess_map.get(maturity)
-            annualized_series = historical_annualized_excess_map.get(maturity)
-            if holding_series is not None and not holding_series.empty:
-                historical_excess_fig.add_trace(
-                    go.Scatter(x=holding_series.index, y=holding_series.values, mode="lines", name=maturity, legendgroup=maturity, line=dict(color=color, width=2.2)),
-                    row=1,
-                    col=1,
-                )
-            if annualized_series is not None and not annualized_series.empty:
-                historical_excess_fig.add_trace(
-                    go.Scatter(x=annualized_series.index, y=annualized_series.values, mode="lines", name=maturity, legendgroup=maturity, line=dict(color=color, width=2.2, dash="dot"), showlegend=False),
-                    row=2,
-                    col=1,
-                )
-        historical_excess_fig.add_hline(y=0, line_color="#475569", line_width=1, line_dash="dot", row=1, col=1)
-        historical_excess_fig.add_hline(y=0, line_color="#475569", line_width=1, line_dash="dot", row=2, col=1)
-        historical_excess_fig.update_yaxes(title_text="Excess Return (%)", row=1, col=1)
-        historical_excess_fig.update_yaxes(title_text="Excess Return (%)", row=2, col=1)
-        historical_excess_fig.update_xaxes(title_text="Date", row=2, col=1)
-        historical_excess_fig.update_layout(
-            title=f"{ticker_str} Historical Excess Returns vs Locked Treasury Benchmarks",
-            template="plotly_white",
-            height=900,
-            legend_title_text="Maturity",
-            hovermode="x unified",
-        )
-        cards.append({"title": "Historical Treasury Excess", "figure": historical_excess_fig})
-
-    if "3M" in treasury_yields.columns:
-        asset_vs_bond_3m = pd.concat([asset_close.rename("Asset_Close"), treasury_yields[["3M"]]], axis=1, join="inner").dropna()
-        asset_vs_bond_3m["asset_trailing_3m_return"] = asset_vs_bond_3m["Asset_Close"].pct_change(63)
-        asset_vs_bond_3m["bond_locked_3m_return"] = (1 + asset_vs_bond_3m["3M"].shift(63) / 100) ** (3 / 12) - 1
-        asset_vs_bond_3m["spread"] = asset_vs_bond_3m["asset_trailing_3m_return"] - asset_vs_bond_3m["bond_locked_3m_return"]
-        asset_vs_bond_3m = asset_vs_bond_3m.dropna()
-        if not asset_vs_bond_3m.empty:
-            latest_asset_vs_bond = asset_vs_bond_3m.iloc[-1]
-            latest_asset_vs_bond_date = asset_vs_bond_3m.index[-1]
-            beat_bond_text = "Yes" if latest_asset_vs_bond["spread"] > 0 else "No"
-            notes.append(
-                f"As of {latest_asset_vs_bond_date:%Y-%m-%d}, {ticker_str} returned "
-                f"{latest_asset_vs_bond['asset_trailing_3m_return']:.2%} over the last 3 months versus "
-                f"{latest_asset_vs_bond['bond_locked_3m_return']:.2%} from a locked 3-month Treasury. "
-                f"Did {ticker_str} beat the bond? {beat_bond_text}."
+    if comparison_windows:
+        window_excess_frames: dict[int, pd.DataFrame] = {}
+        historical_color_sequence = px.colors.qualitative.Bold
+        normalized_windows = [int(window) for window in comparison_windows if int(window) > 0]
+        for window_days in normalized_windows:
+            window_frame = build_window_locked_treasury_excess_frame(
+                price_series=asset_close,
+                treasury_frame=latest_curve_frame,
+                window_days=window_days,
             )
+            if not window_frame.empty:
+                window_excess_frames[window_days] = window_frame
+
+        if window_excess_frames:
+            historical_excess_fig = go.Figure()
+            for idx, window_days in enumerate(normalized_windows):
+                window_frame = window_excess_frames.get(window_days)
+                if window_frame is None or window_frame.empty:
+                    continue
+                color = historical_color_sequence[idx % len(historical_color_sequence)]
+                historical_excess_fig.add_trace(
+                    go.Scatter(
+                        x=window_frame.index,
+                        y=window_frame["spread"].values,
+                        mode="lines",
+                        name=f"{window_days}d Spread",
+                        line=dict(color=color, width=2.3),
+                        customdata=np.column_stack(
+                            (
+                                window_frame["asset_return"].values,
+                                window_frame["treasury_return"].values,
+                                window_frame["locked_yield"].values,
+                            )
+                        ),
+                        hovertemplate=(
+                            "Date=%{x|%Y-%m-%d}<br>"
+                            + f"{window_days}d excess return=%{{y:.2f}}%<br>"
+                            + "Asset return=%{customdata[0]:.2f}%<br>"
+                            + "Locked Treasury return=%{customdata[1]:.2f}%<br>"
+                            + "Locked Treasury annualized yield=%{customdata[2]:.2f}%<extra></extra>"
+                        ),
+                    )
+                )
+            historical_excess_fig.add_hline(y=0, line_color="#475569", line_width=1, line_dash="dot")
+            historical_excess_fig.update_yaxes(title_text="Excess Return (%)")
+            historical_excess_fig.update_xaxes(title_text="Date")
+            historical_excess_fig.update_layout(
+                title=f"{ticker_str} Historical Excess Returns vs Locked Treasury ({', '.join(f'{window}d' for window in normalized_windows)} Windows)",
+                template="plotly_white",
+                height=620,
+                legend_title_text="Window",
+                hovermode="x unified",
+            )
+            cards.append({"title": "Historical Treasury Excess", "figure": historical_excess_fig})
+
+            for window_days in normalized_windows:
+                window_frame = window_excess_frames.get(window_days)
+                if window_frame is None or window_frame.empty:
+                    continue
+                latest_window = window_frame.iloc[-1]
+                latest_window_date = window_frame.index[-1]
+                beat_bond_text = "Yes" if latest_window["spread"] > 0 else "No"
+                notes.append(
+                    f"As of {latest_window_date:%Y-%m-%d}, {ticker_str}'s {window_days}-day return was "
+                    f"{latest_window['asset_return']:.2f}% versus {latest_window['treasury_return']:.2f}% "
+                    f"from a locked Treasury hurdle, for a spread of {latest_window['spread']:.2f}%. "
+                    f"Did {ticker_str} beat the Treasury? {beat_bond_text}."
+                )
+    else:
+        historical_holding_excess_map = {}
+        historical_annualized_excess_map = {}
+        historical_color_sequence = px.colors.qualitative.Bold
+        for maturity in historical_excess_maturities:
+            holding_excess_series, annualized_excess_series = build_historical_excess_return_series(
+                price_series=asset_close,
+                treasury_frame=latest_curve_frame,
+                maturity=maturity,
+            )
+            if not holding_excess_series.empty:
+                historical_holding_excess_map[maturity] = holding_excess_series
+            if not annualized_excess_series.empty:
+                historical_annualized_excess_map[maturity] = annualized_excess_series
+
+        if historical_holding_excess_map or historical_annualized_excess_map:
+            historical_excess_fig = make_subplots(
+                rows=2,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.08,
+                subplot_titles=(
+                    f"{ticker_str} Historical Holding-Period Excess Return vs Locked Treasury",
+                    f"{ticker_str} Historical Annualized Excess Return vs Locked Treasury",
+                ),
+            )
+            for idx, maturity in enumerate(historical_excess_maturities):
+                color = historical_color_sequence[idx % len(historical_color_sequence)]
+                holding_series = historical_holding_excess_map.get(maturity)
+                annualized_series = historical_annualized_excess_map.get(maturity)
+                if holding_series is not None and not holding_series.empty:
+                    historical_excess_fig.add_trace(
+                        go.Scatter(x=holding_series.index, y=holding_series.values, mode="lines", name=maturity, legendgroup=maturity, line=dict(color=color, width=2.2)),
+                        row=1,
+                        col=1,
+                    )
+                if annualized_series is not None and not annualized_series.empty:
+                    historical_excess_fig.add_trace(
+                        go.Scatter(x=annualized_series.index, y=annualized_series.values, mode="lines", name=maturity, legendgroup=maturity, line=dict(color=color, width=2.2, dash="dot"), showlegend=False),
+                        row=2,
+                        col=1,
+                    )
+            historical_excess_fig.add_hline(y=0, line_color="#475569", line_width=1, line_dash="dot", row=1, col=1)
+            historical_excess_fig.add_hline(y=0, line_color="#475569", line_width=1, line_dash="dot", row=2, col=1)
+            historical_excess_fig.update_yaxes(title_text="Excess Return (%)", row=1, col=1)
+            historical_excess_fig.update_yaxes(title_text="Excess Return (%)", row=2, col=1)
+            historical_excess_fig.update_xaxes(title_text="Date", row=2, col=1)
+            historical_excess_fig.update_layout(
+                title=f"{ticker_str} Historical Excess Returns vs Locked Treasury Benchmarks",
+                template="plotly_white",
+                height=900,
+                legend_title_text="Maturity",
+                hovermode="x unified",
+            )
+            cards.append({"title": "Historical Treasury Excess", "figure": historical_excess_fig})
+
+        if "3M" in treasury_yields.columns:
+            asset_vs_bond_3m = pd.concat([asset_close.rename("Asset_Close"), treasury_yields[["3M"]]], axis=1, join="inner").dropna()
+            asset_vs_bond_3m["asset_trailing_3m_return"] = asset_vs_bond_3m["Asset_Close"].pct_change(63)
+            asset_vs_bond_3m["bond_locked_3m_return"] = (1 + asset_vs_bond_3m["3M"].shift(63) / 100) ** (3 / 12) - 1
+            asset_vs_bond_3m["spread"] = asset_vs_bond_3m["asset_trailing_3m_return"] - asset_vs_bond_3m["bond_locked_3m_return"]
+            asset_vs_bond_3m = asset_vs_bond_3m.dropna()
+            if not asset_vs_bond_3m.empty:
+                latest_asset_vs_bond = asset_vs_bond_3m.iloc[-1]
+                latest_asset_vs_bond_date = asset_vs_bond_3m.index[-1]
+                beat_bond_text = "Yes" if latest_asset_vs_bond["spread"] > 0 else "No"
+                notes.append(
+                    f"As of {latest_asset_vs_bond_date:%Y-%m-%d}, {ticker_str} returned "
+                    f"{latest_asset_vs_bond['asset_trailing_3m_return']:.2%} over the last 3 months versus "
+                    f"{latest_asset_vs_bond['bond_locked_3m_return']:.2%} from a locked 3-month Treasury. "
+                    f"Did {ticker_str} beat the bond? {beat_bond_text}."
+                )
 
     return cards, notes, warnings
 

@@ -7,6 +7,8 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from .close_analytics import _calculate_excess_returns
+
 
 class MomentumAnalytics:
     """Helpers to compute momentum spreads and momentum z-score series."""
@@ -139,17 +141,29 @@ class MomentumAnalytics:
             )
         return zscore_data
 
-    def optimal_momentum_window(self, close_series, windows) -> pd.DataFrame:
+    def optimal_momentum_window(
+        self,
+        close_series,
+        windows,
+        risk_free_rate=0.0,
+        annualization_factor: int = 252,
+    ) -> pd.DataFrame:
         """Compute rolling Sharpe values for each window and the optimal window by date."""
         close = self._coerce_close_series(close_series)
         returns = close.pct_change()
+        excess_returns = _calculate_excess_returns(
+            returns,
+            risk_free_rate=risk_free_rate,
+            annualization_factor=annualization_factor,
+        )
         sharpe_by_window = {}
 
         for window in windows:
             window = int(window)
-            mean_return = returns.rolling(window=window).mean()
-            std_return = returns.rolling(window=window).std()
-            sharpe_by_window[window] = mean_return / (std_return + 1e-8)
+            mean_excess_return = excess_returns.rolling(window=window).mean()
+            std_excess_return = excess_returns.rolling(window=window).std()
+            sharpe_ratio = np.sqrt(annualization_factor) * mean_excess_return / std_excess_return
+            sharpe_by_window[window] = sharpe_ratio.where(std_excess_return > 0).replace([np.inf, -np.inf], np.nan)
 
         sharpe_df = pd.DataFrame(sharpe_by_window, index=close.index)
 
@@ -187,6 +201,8 @@ class MomentumAnalytics:
         highlight_windows=(7, 21, 50, 200),
         surface_years: int = 10,
         analytics=None,
+        risk_free_rate=0.0,
+        annualization_factor: int = 252,
     ):
         """
         Build diagnostics context for rolling Sharpe windows and volatility.
@@ -218,7 +234,12 @@ class MomentumAnalytics:
             raise ValueError("surface_years must be a positive integer.")
 
         sharpe_source = analytics if analytics is not None else self
-        sharpe_table = sharpe_source.optimal_momentum_window(close, window_sizes)
+        sharpe_table = sharpe_source.optimal_momentum_window(
+            close,
+            window_sizes,
+            risk_free_rate=risk_free_rate,
+            annualization_factor=annualization_factor,
+        )
         if sharpe_table.empty:
             raise ValueError("Unable to compute rolling Sharpe table for the provided inputs.")
 
@@ -230,8 +251,13 @@ class MomentumAnalytics:
         median_sharpe = sharpe_only.median()
 
         returns = close.pct_change()
+        excess_returns = _calculate_excess_returns(
+            returns,
+            risk_free_rate=risk_free_rate,
+            annualization_factor=annualization_factor,
+        )
         volatility_by_window = {
-            int(window): returns.rolling(window=int(window)).std()
+            int(window): np.sqrt(annualization_factor) * excess_returns.rolling(window=int(window)).std()
             for window in window_sizes
         }
         volatility_df = pd.DataFrame(volatility_by_window, index=close.index)

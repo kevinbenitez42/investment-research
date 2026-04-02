@@ -21,6 +21,7 @@ from plotly.subplots import make_subplots
 import copy
 from collections.abc import Mapping
 from Quantapp.data.market_data_client import MarketDataClient
+from .candlestick_plotter import CandleStickPlotter
 from .figure_helpers import (
     add_horizontal_zone,
     add_horizontal_zone_trace,
@@ -32,6 +33,7 @@ from .figure_helpers import (
     build_time_range_buttons,
     build_visibility_mask,
 )
+from Quantapp.analytics.series_utils import calculate_zscore
 
 rolling = Rolling()
 
@@ -354,7 +356,7 @@ class LineChartPlotter:
 
     def plot_sharpe_sortino_comparison(self, term_config_map, ticker_label="Asset", default_label=None):
         """
-        Plot Sharpe/Sortino ratio and spread z-score panels with a term dropdown.
+        Plot Sharpe/Sortino z-scores, raw ratios, and Sortino-minus-Sharpe spread z-scores with a term dropdown.
         """
         if not isinstance(term_config_map, Mapping) or not term_config_map:
             raise ValueError("term_config_map must be a non-empty mapping.")
@@ -364,36 +366,122 @@ class LineChartPlotter:
             default_label = self._preferred_window_label(term_config_map) or term_labels[0]
 
         fig = make_subplots(
-            rows=2,
+            rows=3,
             cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.08,
+            vertical_spacing=0.06,
+            row_heights=[0.30, 0.38, 0.32],
             subplot_titles=(
-                "Sharpe and Sortino Ratios",
-                "Sharpe-Sortino Spread (z-score)",
+                "Risk-Adjusted Return Z-Score Comparison",
+                "Rolling Sharpe and Sortino Ratios",
+                "Sortino-Sharpe Spread (z-score)",
             ),
         )
+        fig.update_xaxes(matches="x3", row=1, col=1)
+        fig.update_xaxes(matches="x3", row=2, col=1)
 
         term_trace_map = {}
+        term_default_ranges = {}
+        term_full_ranges = {}
         for term_label in term_labels:
             cfg = term_config_map[term_label]
             sharpe = cfg["sharpe"]
             sortino = cfg["sortino"]
+            spread = cfg.get("spread", sortino - sharpe)
+            sharpe_zscore = cfg.get("sharpe_zscore")
+            sortino_zscore = cfg.get("sortino_zscore")
+            spread_zscore = cfg.get("spread_zscore")
             time_frame = cfg.get("time_frame", term_label)
 
-            mean_sharpe = sharpe.mean()
-            mean_sortino = sortino.mean()
+            sharpe_clean = sharpe.dropna()
+            sortino_clean = sortino.dropna()
+            spread_clean = spread.dropna()
+            sharpe_zscore = (
+                sharpe_zscore
+                if isinstance(sharpe_zscore, pd.Series)
+                else calculate_zscore(sharpe_clean).dropna()
+                if not sharpe_clean.empty
+                else pd.Series(dtype=float)
+            )
+            sortino_zscore = (
+                sortino_zscore
+                if isinstance(sortino_zscore, pd.Series)
+                else calculate_zscore(sortino_clean).dropna()
+                if not sortino_clean.empty
+                else pd.Series(dtype=float)
+            )
+            spread_zscore = (
+                spread_zscore
+                if isinstance(spread_zscore, pd.Series)
+                else calculate_zscore(spread_clean).dropna()
+                if not spread_clean.empty
+                else pd.Series(dtype=float)
+            )
+            mean_sharpe = sharpe_clean.mean()
+            mean_sortino = sortino_clean.mean()
 
-            spread = (sharpe - sortino).dropna()
-            spread_mean = spread.mean()
-            spread_std = spread.std(ddof=0)
-            if pd.isna(spread_std) or spread_std == 0:
-                spread_std = 1.0
-            z_spread = (spread - spread_mean) / spread_std
-            z_index = z_spread.index if not z_spread.empty else sharpe.dropna().index
+            zscore_x_ref = max(
+                [series.index for series in (sharpe_zscore, sortino_zscore, spread_zscore) if not series.empty],
+                key=len,
+                default=pd.Index([]),
+            )
+            non_empty_series = [
+                series
+                for series in (sharpe_clean, sortino_clean, sharpe_zscore, sortino_zscore, spread_zscore)
+                if not series.empty
+            ]
 
             visible = term_label == default_label
             trace_indices = []
+
+            fig.add_trace(
+                go.Scatter(
+                    x=sharpe_zscore.index,
+                    y=sharpe_zscore,
+                    mode="lines",
+                    name=f"Sharpe Z-Score ({time_frame}-day)",
+                    line=dict(color="blue"),
+                    visible=visible,
+                    legendgroup="Sharpe Z",
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append(len(fig.data) - 1)
+
+            fig.add_trace(
+                go.Scatter(
+                    x=sortino_zscore.index,
+                    y=sortino_zscore,
+                    mode="lines",
+                    name=f"Sortino Z-Score ({time_frame}-day)",
+                    line=dict(color="orange"),
+                    visible=visible,
+                    legendgroup="Sortino Z",
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append(len(fig.data) - 1)
+
+            if len(zscore_x_ref) > 0:
+                add_mean_reference_line(
+                    fig,
+                    1,
+                    zscore_x_ref,
+                    line_color="rgba(0, 0, 0, 0.70)",
+                    visible=visible,
+                )
+                trace_indices.append(len(fig.data) - 1)
+                add_sigma_reference_lines(
+                    fig,
+                    1,
+                    zscore_x_ref,
+                    levels=(1, 2),
+                    line_color="rgba(110, 110, 110, 0.45)",
+                    visible=visible,
+                )
+                trace_indices.extend(range(len(fig.data) - 4, len(fig.data)))
 
             fig.add_trace(
                 go.Scatter(
@@ -405,7 +493,7 @@ class LineChartPlotter:
                     visible=visible,
                     legendgroup="Sharpe",
                 ),
-                row=1,
+                row=2,
                 col=1,
             )
             trace_indices.append(len(fig.data) - 1)
@@ -420,7 +508,7 @@ class LineChartPlotter:
                     visible=visible,
                     legendgroup="Sortino",
                 ),
-                row=1,
+                row=2,
                 col=1,
             )
             trace_indices.append(len(fig.data) - 1)
@@ -437,7 +525,7 @@ class LineChartPlotter:
                     legendgroup="Sharpe Mean",
                     showlegend=False,
                 ),
-                row=1,
+                row=2,
                 col=1,
             )
             trace_indices.append(len(fig.data) - 1)
@@ -454,61 +542,111 @@ class LineChartPlotter:
                     legendgroup="Sortino Mean",
                     showlegend=False,
                 ),
-                row=1,
+                row=2,
                 col=1,
             )
             trace_indices.append(len(fig.data) - 1)
 
             fig.add_trace(
                 go.Scatter(
-                    x=z_index,
-                    y=z_spread.reindex(z_index),
+                    x=spread_zscore.index,
+                    y=spread_zscore,
                     mode="lines",
-                    name=f"Sharpe-Sortino Spread ({time_frame}-day)",
+                    name=f"Sortino-Sharpe Spread ({time_frame}-day)",
                     line=dict(color="green"),
                     visible=visible,
                     legendgroup="Spread",
                 ),
-                row=2,
+                row=3,
                 col=1,
             )
             trace_indices.append(len(fig.data) - 1)
 
-            if len(z_index) > 0:
-                for level, color in [(0, "black"), (1, "red"), (-1, "red"), (2, "purple"), (-2, "purple")]:
+            if len(zscore_x_ref) > 0:
+                add_horizontal_zone_trace(
+                    fig,
+                    3,
+                    zscore_x_ref,
+                    2,
+                    3,
+                    "rgba(180, 0, 0, 0.20)",
+                    visible=visible,
+                )
+                trace_indices.append(len(fig.data) - 1)
+                add_horizontal_zone_trace(
+                    fig,
+                    3,
+                    zscore_x_ref,
+                    -1,
+                    -0.5,
+                    "rgba(0, 128, 0, 0.18)",
+                    visible=visible,
+                )
+                trace_indices.append(len(fig.data) - 1)
+                fig.add_trace(
+                    go.Scatter(
+                        x=zscore_x_ref,
+                        y=np.full(len(zscore_x_ref), 3.0),
+                        mode="lines",
+                        line=dict(color="rgba(128, 0, 128, 0.75)", dash="dot"),
+                        hoverinfo="skip",
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=3,
+                    col=1,
+                )
+                trace_indices.append(len(fig.data) - 1)
+                add_mean_reference_line(
+                    fig,
+                    3,
+                    zscore_x_ref,
+                    line_color="rgba(0, 0, 0, 0.70)",
+                    visible=visible,
+                )
+                trace_indices.append(len(fig.data) - 1)
+                for level in (-1, -0.5, 1, 2):
                     fig.add_trace(
                         go.Scatter(
-                            x=z_index,
-                            y=np.full(len(z_index), level),
+                            x=zscore_x_ref,
+                            y=np.full(len(zscore_x_ref), float(level)),
                             mode="lines",
-                            line=dict(color=color, dash="dot"),
+                            line=dict(color="rgba(110, 110, 110, 0.45)", dash="dot"),
                             hoverinfo="skip",
                             showlegend=False,
                             visible=visible,
                         ),
-                        row=2,
+                        row=3,
                         col=1,
                     )
                     trace_indices.append(len(fig.data) - 1)
 
-            if not z_spread.empty:
+            if not spread_zscore.empty:
                 fig.add_trace(
                     go.Scatter(
-                        x=[z_spread.index[-1]],
-                        y=[z_spread.mean()],
+                        x=[spread_zscore.index[-1]],
+                        y=[spread_zscore.iloc[-1]],
                         mode="markers+text",
-                        text=[f"Mean z: {z_spread.mean():.2f}"],
+                        text=[f"Latest z: {spread_zscore.iloc[-1]:.2f}"],
                         textposition="middle right",
                         marker=dict(color="purple", size=6),
                         showlegend=False,
                         visible=visible,
                     ),
-                    row=2,
+                    row=3,
                     col=1,
                 )
                 trace_indices.append(len(fig.data) - 1)
 
             term_trace_map[term_label] = trace_indices
+            if non_empty_series:
+                max_index = max(series.index.max() for series in non_empty_series)
+                min_index = min(series.index.min() for series in non_empty_series)
+                term_full_ranges[term_label] = [min_index, max_index]
+                term_default_ranges[term_label] = [max(min_index, max_index - pd.DateOffset(years=3)), max_index]
+            else:
+                term_full_ranges[term_label] = None
+                term_default_ranges[term_label] = None
 
         total_traces = len(fig.data)
         buttons = []
@@ -517,25 +655,46 @@ class LineChartPlotter:
             for trace_idx in term_trace_map[term_label]:
                 visibility[trace_idx] = True
 
+            layout_updates = {
+                "title": self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({term_label})")
+            }
+            if term_default_ranges.get(term_label) is not None:
+                layout_updates["xaxis"] = {"range": term_default_ranges[term_label]}
+                layout_updates["xaxis2"] = {"range": term_default_ranges[term_label]}
+                layout_updates["xaxis3"] = {"range": term_default_ranges[term_label]}
+
             buttons.append(
                 dict(
                     label=term_label,
                     method="update",
                     args=[
                         {"visible": visibility},
-                        {"title": self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({term_label})")},
+                        layout_updates,
                     ],
                 )
             )
 
+        available_ranges = [date_range for date_range in term_full_ranges.values() if date_range is not None]
+        if available_ranges:
+            global_start = min(date_range[0] for date_range in available_ranges)
+            global_end = max(date_range[1] for date_range in available_ranges)
+            fig.update_xaxes(range=term_default_ranges[default_label] or [global_start, global_end])
+            time_range_menu = self._dropdown_menu(
+                buttons=build_time_range_buttons(global_start, global_end, axis_count=3),
+                x=0.22,
+            )
+        else:
+            time_range_menu = None
+
         fig.update_layout(
             template="plotly_white",
-            height=900,
+            height=1100,
             margin=self._header_margin(),
             legend=dict(x=0.01, y=0.99),
-            xaxis2_title="Date",
-            yaxis_title="Ratio Value",
-            yaxis2_title="Spread (z-score)",
+            xaxis3_title="Date",
+            yaxis_title="Z-Score",
+            yaxis2_title="Ratio Value",
+            yaxis3_title="Z-Score",
             title=self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({default_label})"),
             updatemenus=[
                 self._dropdown_menu(
@@ -543,7 +702,8 @@ class LineChartPlotter:
                     x=0.01,
                     active=term_labels.index(default_label),
                 )
-            ],
+            ]
+            + ([time_range_menu] if time_range_menu is not None else []),
         )
         return fig
 
@@ -577,7 +737,8 @@ class LineChartPlotter:
 
         fig = make_subplots(rows=1, cols=1)
         benchmark_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
-        term_ranges = {}
+        term_default_ranges = {}
+        term_full_ranges = {}
         term_trace_bounds = {}
 
         for term in term_order:
@@ -621,9 +782,11 @@ class LineChartPlotter:
             if non_empty_series:
                 max_index = max(series.index.max() for series in non_empty_series)
                 min_index = min(series.index.min() for series in non_empty_series)
-                term_ranges[term] = [max(min_index, max_index - pd.DateOffset(years=3)), max_index]
+                term_full_ranges[term] = [min_index, max_index]
+                term_default_ranges[term] = [max(min_index, max_index - pd.DateOffset(years=3)), max_index]
             else:
-                term_ranges[term] = None
+                term_full_ranges[term] = None
+                term_default_ranges[term] = None
 
         add_zone_annotation(fig, 1, -2, -1.5, "Liquidate", "rgba(255, 235, 235, 0.95)")
         add_zone_annotation(fig, 1, 1.5, 2, "Accumulate", "rgba(235, 255, 235, 0.95)")
@@ -643,8 +806,8 @@ class LineChartPlotter:
                 ),
                 "yaxis": {"title": "Sharpe Spread Z-Score"},
             }
-            if term_ranges.get(term) is not None:
-                layout_updates["xaxis"] = {"range": term_ranges[term]}
+            if term_default_ranges.get(term) is not None:
+                layout_updates["xaxis"] = {"range": term_default_ranges[term]}
 
             timeframe_buttons.append(
                 dict(
@@ -654,11 +817,11 @@ class LineChartPlotter:
                 )
             )
 
-        available_ranges = [date_range for date_range in term_ranges.values() if date_range is not None]
+        available_ranges = [date_range for date_range in term_full_ranges.values() if date_range is not None]
         if available_ranges:
             global_start = min(date_range[0] for date_range in available_ranges)
             global_end = max(date_range[1] for date_range in available_ranges)
-            fig.update_xaxes(range=term_ranges[default_term] or [global_start, global_end])
+            fig.update_xaxes(range=term_default_ranges[default_term] or [global_start, global_end])
             time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(global_start, global_end),
                 x=0.22,
@@ -872,13 +1035,13 @@ class LineChartPlotter:
         detail_x_ref = max((trace.x for trace in detail_fig.data if len(trace.x) > 0), key=len, default=None)
         if detail_x_ref is not None:
             add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, -1, 1, "rgba(211, 211, 211, 0.18)")
-            add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, -3, -2, "rgba(0, 128, 0, 0.30)")
-            add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, 2, 3, "rgba(180, 0, 0, 0.30)")
+            add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, -2, -1, "rgba(0, 128, 0, 0.30)")
+            add_horizontal_zone_trace(detail_fig, 1, detail_x_ref, 1, 2, "rgba(180, 0, 0, 0.30)")
             add_zone_annotation(detail_fig, 1, -1, 1, "Neutral", "rgba(235, 235, 235, 0.95)")
             add_zone_annotation(detail_fig, 1, -0.85, -0.25, "Bullish Neutral (on the way up) ↑", "rgba(235, 235, 235, 0.90)")
             add_zone_annotation(detail_fig, 1, 0.25, 0.85, "Bearish Neutral (on the way down) ↓", "rgba(235, 235, 235, 0.90)")
-            add_zone_annotation(detail_fig, 1, -3, -2, "Accumulate", "rgba(235, 255, 235, 0.95)")
-            add_zone_annotation(detail_fig, 1, 2, 3, "Liquidate", "rgba(255, 235, 235, 0.95)")
+            add_zone_annotation(detail_fig, 1, -2, -1, "Accumulate", "rgba(235, 255, 235, 0.95)")
+            add_zone_annotation(detail_fig, 1, 1, 2, "Liquidate", "rgba(255, 235, 235, 0.95)")
             add_sigma_reference_lines(detail_fig, 1, detail_x_ref)
             add_mean_reference_line(detail_fig, 2, detail_x_ref)
             add_mean_reference_line(detail_fig, 3, detail_x_ref)
@@ -1277,6 +1440,1179 @@ class LineChartPlotter:
         )
         return fig
 
+    def plot_peak_pullback_and_rolling_drawdown(
+        self,
+        price_frame,
+        metrics_by_window,
+        window_options=None,
+        default_window=None,
+        ticker_label="Asset",
+        title=None,
+        display_days=None,
+        template="plotly_dark",
+    ):
+        """
+        Plot underwater drawdown against textbook rolling max drawdown,
+        plus rolling recovery time, with a shared window dropdown.
+        """
+        if "Close" not in price_frame.columns:
+            raise ValueError("price_frame must contain a 'Close' column.")
+        if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
+            raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
+
+        plot_data = price_frame.copy()
+        if not isinstance(plot_data.index, pd.DatetimeIndex):
+            plot_data.index = pd.to_datetime(plot_data.index)
+        plot_data = plot_data.sort_index().dropna(subset=["Close"])
+        if plot_data.empty:
+            raise ValueError("No non-null close data available for pullback plotting.")
+
+        if window_options is None:
+            window_options = list(metrics_by_window.keys())
+        else:
+            try:
+                window_options = [int(window) for window in window_options]
+            except Exception as exc:
+                raise ValueError("window_options must be iterable integers.") from exc
+            window_options = [window for window in window_options if window in metrics_by_window]
+
+        if not window_options:
+            raise ValueError("No valid window options available for plotting.")
+
+        if default_window not in window_options:
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
+
+        if display_days is not None:
+            display_days = self._coerce_positive_int(display_days)
+            if display_days is None:
+                raise ValueError("display_days must be a positive integer.")
+
+        combined_title = str(
+            title or f"{ticker_label} Drawdown and Recovery Profile"
+        )
+
+        def _annotation_payload(annotation):
+            if hasattr(annotation, "to_plotly_json"):
+                return copy.deepcopy(annotation).to_plotly_json()
+            return copy.deepcopy(dict(annotation))
+
+        def _window_title(window):
+            return f"{combined_title} ({window}-Day Window)"
+
+        def _percentile_rank(series, value):
+            cleaned = pd.Series(series).dropna()
+            if cleaned.empty or pd.isna(value):
+                return np.nan
+            return float(cleaned.le(value).mean() * 100)
+
+        def _format_percentile(value):
+            return "n/a" if pd.isna(value) else f"{value:.0f}th pctile"
+
+        def _line_annotation(*, x, y, text, color, xref, yref, yshift=0):
+            if x is None or pd.isna(y):
+                return None
+            return dict(
+                x=x,
+                y=float(y),
+                xref=xref,
+                yref=yref,
+                text=text,
+                showarrow=False,
+                xanchor="left",
+                yanchor="middle",
+                xshift=8,
+                yshift=yshift,
+                font=dict(size=10, color=color),
+                bgcolor="rgba(15, 23, 42, 0.70)",
+                bordercolor=color,
+                borderwidth=1,
+            )
+
+        def _slice_visible(series, start=None, end=None):
+            return CandleStickPlotter._slice_series_to_range(series, start=start, end=end)
+
+        def _constant_axis_series(value):
+            if pd.isna(value):
+                return None
+            return pd.Series([float(value)])
+
+        def _rolling_recovery_time(close_series, window):
+            def recovery_window(window_values):
+                values = np.asarray(window_values, dtype=float)
+                values = values[~np.isnan(values)]
+                if values.size == 0:
+                    return np.nan
+
+                peaks = np.maximum.accumulate(values)
+                drawdowns = values / peaks - 1.0
+                trough_idx = int(np.nanargmin(drawdowns))
+                if trough_idx >= values.size - 1:
+                    return np.nan
+
+                peak_at_trough = peaks[trough_idx]
+                recovery_candidates = np.flatnonzero(values[trough_idx + 1:] >= peak_at_trough)
+                if recovery_candidates.size == 0:
+                    return np.nan
+
+                recovery_idx = trough_idx + 1 + int(recovery_candidates[0])
+                return float(recovery_idx - trough_idx)
+
+            return close_series.rolling(window=window).apply(recovery_window, raw=True).dropna()
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=False,
+            vertical_spacing=0.08,
+            row_heights=[0.58, 0.42],
+            subplot_titles=(
+                "Underwater vs Textbook Rolling Max Drawdown",
+                "Rolling Recovery Time (Trough to Recovered High)",
+            ),
+        )
+        subplot_title_annotations = [_annotation_payload(annotation) for annotation in fig.layout.annotations]
+
+        trace_state_map = {}
+        annotation_map = {}
+        drawdown_series_map = {}
+        recovery_series_map = {}
+
+        for window in window_options:
+            rolling_peak = plot_data["Close"].rolling(window=window, min_periods=1).max()
+            underwater_series = (
+                plot_data["Close"]
+                .div(rolling_peak)
+                .sub(1.0)
+                .dropna()
+            )
+            drawdown_series = (
+                metrics_by_window.get(window, {})
+                .get("max_drawdown", pd.Series(dtype=float))
+                .dropna()
+            )
+            recovery_series = _rolling_recovery_time(plot_data["Close"], window)
+
+            shared_index = underwater_series.index.intersection(drawdown_series.index)
+            if display_days is not None:
+                shared_index = shared_index[-display_days:]
+
+            visible_underwater = underwater_series.reindex(shared_index).dropna()
+            visible_drawdown = drawdown_series.reindex(shared_index).dropna()
+            drawdown_series_map[window] = visible_drawdown
+            if display_days is not None and len(shared_index) > 0:
+                recovery_start = shared_index[0]
+                recovery_end = shared_index[-1]
+                visible_recovery = recovery_series.loc[recovery_start:recovery_end].dropna()
+            else:
+                visible_recovery = recovery_series
+            recovery_series_map[window] = visible_recovery
+
+            underwater_p05 = underwater_series.quantile(0.05) if not underwater_series.empty else np.nan
+            drawdown_p05 = drawdown_series.quantile(0.05) if not drawdown_series.empty else np.nan
+            recovery_p95 = recovery_series.quantile(0.95) if not recovery_series.empty else np.nan
+
+            underwater_current = underwater_series.iloc[-1] if not underwater_series.empty else np.nan
+            drawdown_current = drawdown_series.iloc[-1] if not drawdown_series.empty else np.nan
+            recovery_current = recovery_series.iloc[-1] if not recovery_series.empty else np.nan
+
+            underwater_rank = _percentile_rank(underwater_series, underwater_current)
+            drawdown_rank = _percentile_rank(drawdown_series, drawdown_current)
+            recovery_rank = _percentile_rank(recovery_series, recovery_current)
+
+            drawdown_x_ref = visible_underwater.index if not visible_underwater.empty else visible_drawdown.index
+            recovery_x_ref = visible_recovery.index
+            drawdown_last_x = drawdown_x_ref[-1] if len(drawdown_x_ref) > 0 else None
+            recovery_last_x = recovery_x_ref[-1] if len(recovery_x_ref) > 0 else None
+
+            default_states = [True, True, True, True, True, True]
+            visible_states = [
+                state if window == default_window else False
+                for state in default_states
+            ]
+            trace_indices = []
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_underwater.index,
+                    y=visible_underwater,
+                    mode="lines",
+                    name=f"{window}-Day Underwater",
+                    line=dict(color="#0ea5e9", width=2),
+                    visible=visible_states[0],
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[0]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_drawdown.index,
+                    y=visible_drawdown,
+                    mode="lines",
+                    name=f"{window}-Day Textbook Max Drawdown",
+                    line=dict(color="#f97316", width=2, dash="dot"),
+                    visible=visible_states[1],
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[1]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=drawdown_x_ref,
+                    y=[underwater_p05] * len(drawdown_x_ref),
+                    mode="lines",
+                    name="Underwater 5th Percentile",
+                    line=dict(color="rgba(14, 165, 233, 0.55)", width=1.5, dash="dash"),
+                    hovertemplate="Underwater 5th percentile: %{y:.1%}<extra></extra>",
+                    visible=visible_states[2],
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[2]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=drawdown_x_ref,
+                    y=[drawdown_p05] * len(drawdown_x_ref),
+                    mode="lines",
+                    name="Textbook 5th Percentile",
+                    line=dict(color="rgba(249, 115, 22, 0.55)", width=1.5, dash="dash"),
+                    hovertemplate="Textbook 5th percentile: %{y:.1%}<extra></extra>",
+                    visible=visible_states[3],
+                ),
+                row=1,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[3]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_recovery.index,
+                    y=visible_recovery,
+                    mode="lines",
+                    name=f"{window}-Day Recovery Time",
+                    line=dict(color="#22c55e", width=2),
+                    visible=visible_states[4],
+                ),
+                row=2,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[4]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=recovery_x_ref,
+                    y=[recovery_p95] * len(recovery_x_ref),
+                    mode="lines",
+                    name="Recovery 95th Percentile",
+                    line=dict(color="rgba(34, 197, 94, 0.60)", width=1.5, dash="dash"),
+                    hovertemplate="Recovery 95th percentile: %{y:.0f} sessions<extra></extra>",
+                    visible=visible_states[5],
+                ),
+                row=2,
+                col=1,
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[5]))
+
+            line_annotations = [
+                _line_annotation(
+                    x=visible_underwater.index[-1] if not visible_underwater.empty else None,
+                    y=visible_underwater.iloc[-1] if not visible_underwater.empty else np.nan,
+                    text="Underwater",
+                    color="#0ea5e9",
+                    xref="x",
+                    yref="y",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=visible_drawdown.index[-1] if not visible_drawdown.empty else None,
+                    y=visible_drawdown.iloc[-1] if not visible_drawdown.empty else np.nan,
+                    text="Textbook Max DD",
+                    color="#f97316",
+                    xref="x",
+                    yref="y",
+                    yshift=-12,
+                ),
+                _line_annotation(
+                    x=drawdown_last_x,
+                    y=underwater_p05,
+                    text="Underwater 5th pct",
+                    color="rgba(14, 165, 233, 0.90)",
+                    xref="x",
+                    yref="y",
+                    yshift=-12,
+                ),
+                _line_annotation(
+                    x=drawdown_last_x,
+                    y=drawdown_p05,
+                    text="Textbook 5th pct",
+                    color="rgba(249, 115, 22, 0.90)",
+                    xref="x",
+                    yref="y",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=visible_recovery.index[-1] if not visible_recovery.empty else None,
+                    y=visible_recovery.iloc[-1] if not visible_recovery.empty else np.nan,
+                    text="Recovery Time",
+                    color="#22c55e",
+                    xref="x2",
+                    yref="y2",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=recovery_last_x,
+                    y=recovery_p95,
+                    text="Recovery 95th pct",
+                    color="rgba(34, 197, 94, 0.90)",
+                    xref="x2",
+                    yref="y2",
+                    yshift=-12,
+                ),
+            ]
+
+            trace_state_map[window] = trace_indices
+            annotation_map[window] = subplot_title_annotations + [annotation for annotation in line_annotations if annotation is not None] + [
+                dict(
+                    x=0.995,
+                    y=0.88,
+                    xref="paper",
+                    yref="paper",
+                    xanchor="right",
+                    yanchor="top",
+                    showarrow=False,
+                    align="right",
+                    font=dict(size=11),
+                    bgcolor="rgba(15, 23, 42, 0.72)",
+                    bordercolor="rgba(148, 163, 184, 0.35)",
+                    borderwidth=1,
+                    text=(
+                        f"Latest underwater: {underwater_current:.1%} ({_format_percentile(underwater_rank)})"
+                        "<br>"
+                        f"Latest textbook: {drawdown_current:.1%} ({_format_percentile(drawdown_rank)})"
+                    ),
+                ),
+                dict(
+                    x=0.995,
+                    y=0.26,
+                    xref="paper",
+                    yref="paper",
+                    xanchor="right",
+                    yanchor="top",
+                    showarrow=False,
+                    align="right",
+                    font=dict(size=11),
+                    bgcolor="rgba(15, 23, 42, 0.72)",
+                    bordercolor="rgba(148, 163, 184, 0.35)",
+                    borderwidth=1,
+                    text=(
+                        f"Latest completed recovery: {recovery_current:.0f} sessions ({_format_percentile(recovery_rank)})"
+                        if not pd.isna(recovery_current)
+                        else "Latest completed recovery: n/a"
+                    ),
+                ),
+            ]
+
+        fig.update_xaxes(
+            title_text="Date",
+            type="date",
+            showgrid=True,
+            zeroline=False,
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            row=1,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Drawdown", tickformat=".0%", row=1, col=1)
+        fig.update_xaxes(
+            title_text="Date",
+            type="date",
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            matches="x",
+            row=2,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Sessions", rangemode="tozero", row=2, col=1)
+        fig.add_hline(
+            y=0,
+            row=1,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(148, 163, 184, 0.45)",
+            line_width=1,
+        )
+
+        total_traces = len(fig.data)
+        buttons = []
+        for window in window_options:
+            visibility = [False] * total_traces
+            for trace_idx, state in trace_state_map[window]:
+                visibility[trace_idx] = state
+            buttons.append(
+                dict(
+                    label=f"{window}-Day",
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {
+                            "title": self._header_title(_window_title(window)),
+                            "annotations": annotation_map[window],
+                        },
+                    ],
+                )
+            )
+
+        updatemenus = [
+            self._dropdown_menu(
+                buttons=buttons,
+                x=0.0,
+                active=window_options.index(default_window),
+            )
+        ]
+
+        available_indexes = [series.index for series in drawdown_series_map.values() if not series.empty]
+        if available_indexes:
+            global_start = min(index[0] for index in available_indexes)
+            global_end = max(index[-1] for index in available_indexes)
+            recovery_indexes = [series.index for series in recovery_series_map.values() if not series.empty]
+            if recovery_indexes:
+                global_start = min(global_start, min(index[0] for index in recovery_indexes))
+                global_end = max(global_end, max(index[-1] for index in recovery_indexes))
+            default_start = global_start
+            fig.update_xaxes(range=[default_start, global_end], row=1, col=1)
+            fig.update_xaxes(range=[default_start, global_end], row=2, col=1)
+
+            def _drawdown_range(years=None):
+                start = global_start if years is None else max(global_start, global_end - pd.DateOffset(years=years))
+                return {
+                    "xaxis.range": [start, global_end],
+                    "xaxis2.range": [start, global_end],
+                }
+
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=[
+                        dict(label="Full", method="relayout", args=[_drawdown_range()]),
+                        dict(label="10 Years", method="relayout", args=[_drawdown_range(10)]),
+                        dict(label="5 Years", method="relayout", args=[_drawdown_range(5)]),
+                        dict(label="3 Years", method="relayout", args=[_drawdown_range(3)]),
+                        dict(label="1 Year", method="relayout", args=[_drawdown_range(1)]),
+                    ],
+                    x=0.18,
+                )
+            )
+
+        fig.update_layout(
+            updatemenus=updatemenus,
+            title=self._header_title(_window_title(default_window)),
+            height=1180,
+            margin=self._header_margin(top=190),
+            template=template,
+            showlegend=True,
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            annotations=annotation_map[default_window],
+        )
+        return fig
+
+    def plot_candlestick_drawdown_recovery_profile(
+        self,
+        price_frame,
+        metrics_by_window,
+        window_options=None,
+        default_window=None,
+        ticker_label="Asset",
+        title=None,
+        candlestick_period=None,
+        candlestick_bollinger_window=50,
+        candlestick_mapped_drawdown_windows=None,
+        timeframe_options=None,
+        default_timeframe_label="Full",
+        template="plotly_dark",
+    ):
+        """
+        Plot a stacked candlestick, drawdown, and recovery profile with linked zoom.
+        """
+        if "Close" not in price_frame.columns:
+            raise ValueError("price_frame must contain a 'Close' column.")
+        if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
+            raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
+
+        plot_data = price_frame.copy()
+        if not isinstance(plot_data.index, pd.DatetimeIndex):
+            plot_data.index = pd.to_datetime(plot_data.index)
+        plot_data = plot_data.sort_index().dropna(subset=["Close"])
+        if plot_data.empty:
+            raise ValueError("No non-null close data available for plotting.")
+
+        if window_options is None:
+            window_options = list(metrics_by_window.keys())
+        else:
+            try:
+                window_options = [int(window) for window in window_options]
+            except Exception as exc:
+                raise ValueError("window_options must be iterable integers.") from exc
+            window_options = [window for window in window_options if window in metrics_by_window]
+
+        if not window_options:
+            raise ValueError("No valid window options available for plotting.")
+
+        if default_window not in window_options:
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
+
+        if candlestick_mapped_drawdown_windows is None:
+            candlestick_mapped_drawdown_windows = list(window_options)
+        else:
+            candlestick_mapped_drawdown_windows = [
+                int(window) for window in candlestick_mapped_drawdown_windows
+            ]
+
+        if timeframe_options is None:
+            timeframe_options = [
+                ("Full", None),
+                ("10 Years", pd.DateOffset(years=10)),
+                ("5 Years", pd.DateOffset(years=5)),
+                ("3 Years", pd.DateOffset(years=3)),
+                ("2 Years", pd.DateOffset(years=2)),
+                ("1 Year", pd.DateOffset(years=1)),
+                ("6 Months", pd.DateOffset(months=6)),
+                ("3 Months", pd.DateOffset(months=3)),
+            ]
+
+        timeframe_labels = [str(label) for label, _ in timeframe_options]
+        try:
+            default_timeframe_index = next(
+                idx
+                for idx, label in enumerate(timeframe_labels)
+                if label.lower() == str(default_timeframe_label).lower()
+            )
+        except StopIteration:
+            default_timeframe_index = 0
+
+        combined_title = str(
+            title or f"{ticker_label} Candlestick, Drawdown, and Recovery Profile"
+        )
+
+        def _annotation_payload(annotation):
+            if hasattr(annotation, "to_plotly_json"):
+                return copy.deepcopy(annotation).to_plotly_json()
+            return copy.deepcopy(dict(annotation))
+
+        def _window_title(window):
+            return f"{combined_title} ({window}-Day Window)"
+
+        def _percentile_rank(series, value):
+            cleaned = pd.Series(series).dropna()
+            if cleaned.empty or pd.isna(value):
+                return np.nan
+            return float(cleaned.le(value).mean() * 100)
+
+        def _format_percentile(value):
+            return "n/a" if pd.isna(value) else f"{value:.0f}th pctile"
+
+        def _line_annotation(*, x, y, text, color, xref, yref, yshift=0):
+            if x is None or pd.isna(y):
+                return None
+            return dict(
+                x=x,
+                y=float(y),
+                xref=xref,
+                yref=yref,
+                text=text,
+                showarrow=False,
+                xanchor="left",
+                yanchor="middle",
+                xshift=8,
+                yshift=yshift,
+                font=dict(size=10, color=color),
+                bgcolor="rgba(15, 23, 42, 0.70)",
+                bordercolor=color,
+                borderwidth=1,
+            )
+
+        def _slice_visible(series, start=None, end=None):
+            return CandleStickPlotter._slice_series_to_range(series, start=start, end=end)
+
+        def _constant_axis_series(value):
+            if pd.isna(value):
+                return None
+            return pd.Series([float(value)])
+
+        def _rolling_recovery_time(close_series, window):
+            def recovery_window(window_values):
+                values = np.asarray(window_values, dtype=float)
+                values = values[~np.isnan(values)]
+                if values.size == 0:
+                    return np.nan
+
+                peaks = np.maximum.accumulate(values)
+                drawdowns = values / peaks - 1.0
+                trough_idx = int(np.nanargmin(drawdowns))
+                if trough_idx >= values.size - 1:
+                    return np.nan
+
+                peak_at_trough = peaks[trough_idx]
+                recovery_candidates = np.flatnonzero(values[trough_idx + 1:] >= peak_at_trough)
+                if recovery_candidates.size == 0:
+                    return np.nan
+
+                recovery_idx = trough_idx + 1 + int(recovery_candidates[0])
+                return float(recovery_idx - trough_idx)
+
+            return close_series.rolling(window=window).apply(recovery_window, raw=True).dropna()
+
+        candlestick_plotter = CandleStickPlotter()
+        candlestick_bundle = candlestick_plotter.build_candlestick_trace_bundle(
+            ticker_data=plot_data,
+            period=candlestick_period,
+            bollinger_window=candlestick_bollinger_window,
+            max_drawdown_price_windows=candlestick_mapped_drawdown_windows,
+        )
+
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            shared_xaxes=False,
+            vertical_spacing=0.05,
+            row_heights=[0.50, 0.30, 0.20],
+            subplot_titles=(
+                f"Candlestick Price with {candlestick_bollinger_window}-Period Bollinger or Mapped MDD Overlay",
+                "Underwater vs Textbook Rolling Max Drawdown",
+                "Rolling Recovery Time (Trough to Recovered High)",
+            ),
+        )
+        subplot_title_annotations = [_annotation_payload(annotation) for annotation in fig.layout.annotations]
+
+        for trace in candlestick_bundle["traces"]:
+            fig.add_trace(copy.deepcopy(trace), row=1, col=1)
+
+        candlestick_overlay_groups = {
+            overlay_name: list(trace_indices)
+            for overlay_name, trace_indices in candlestick_bundle["overlay_trace_groups"].items()
+        }
+        overlay_trace_indices = (
+            candlestick_overlay_groups["bollinger"] + candlestick_overlay_groups["mapped_mdd"]
+        )
+        default_overlay = (
+            "mapped_mdd"
+            if candlestick_overlay_groups["mapped_mdd"]
+            else "bollinger"
+        )
+        for trace_idx in candlestick_overlay_groups["bollinger"]:
+            fig.data[trace_idx].visible = default_overlay == "bollinger"
+        for trace_idx in candlestick_overlay_groups["mapped_mdd"]:
+            fig.data[trace_idx].visible = default_overlay == "mapped_mdd"
+
+        static_annotations = list(subplot_title_annotations)
+        if candlestick_bundle["latest_close_annotation"] is not None:
+            top_annotation = _annotation_payload(candlestick_bundle["latest_close_annotation"])
+            top_annotation["xref"] = "x"
+            top_annotation["yref"] = "y"
+            static_annotations.append(top_annotation)
+
+        menu_specs = [
+            ("Damage window", 0.00),
+            ("View timeframe", 0.18),
+        ]
+        if overlay_trace_indices:
+            menu_specs.append(("Overlay mode", 0.38))
+        for label, x_pos in menu_specs:
+            static_annotations.append(
+                dict(
+                    text=label,
+                    x=x_pos,
+                    xref="paper",
+                    y=1.115,
+                    yref="paper",
+                    showarrow=False,
+                    xanchor="left",
+                )
+            )
+
+        trace_state_map = {}
+        annotation_map = {}
+        underwater_series_map = {}
+        drawdown_series_map = {}
+        recovery_series_map = {}
+        underwater_percentile_map = {}
+        drawdown_percentile_map = {}
+        recovery_percentile_map = {}
+        drawdown_trace_indices = []
+
+        for window in window_options:
+            rolling_peak = plot_data["Close"].rolling(window=window, min_periods=1).max()
+            underwater_series = (
+                plot_data["Close"]
+                .div(rolling_peak)
+                .sub(1.0)
+                .dropna()
+            )
+            drawdown_series = (
+                metrics_by_window.get(window, {})
+                .get("max_drawdown", pd.Series(dtype=float))
+                .dropna()
+            )
+            recovery_series = _rolling_recovery_time(plot_data["Close"], window)
+
+            shared_index = underwater_series.index.intersection(drawdown_series.index)
+            visible_underwater = underwater_series.reindex(shared_index).dropna()
+            visible_drawdown = drawdown_series.reindex(shared_index).dropna()
+            visible_recovery = recovery_series
+
+            underwater_series_map[window] = visible_underwater
+            drawdown_series_map[window] = visible_drawdown
+            recovery_series_map[window] = visible_recovery
+
+            underwater_p05 = underwater_series.quantile(0.05) if not underwater_series.empty else np.nan
+            drawdown_p05 = drawdown_series.quantile(0.05) if not drawdown_series.empty else np.nan
+            recovery_p95 = recovery_series.quantile(0.95) if not recovery_series.empty else np.nan
+
+            underwater_percentile_map[window] = underwater_p05
+            drawdown_percentile_map[window] = drawdown_p05
+            recovery_percentile_map[window] = recovery_p95
+
+            underwater_current = underwater_series.iloc[-1] if not underwater_series.empty else np.nan
+            drawdown_current = drawdown_series.iloc[-1] if not drawdown_series.empty else np.nan
+            recovery_current = recovery_series.iloc[-1] if not recovery_series.empty else np.nan
+
+            underwater_rank = _percentile_rank(underwater_series, underwater_current)
+            drawdown_rank = _percentile_rank(drawdown_series, drawdown_current)
+            recovery_rank = _percentile_rank(recovery_series, recovery_current)
+
+            drawdown_x_ref = visible_underwater.index if not visible_underwater.empty else visible_drawdown.index
+            recovery_x_ref = visible_recovery.index
+            drawdown_last_x = drawdown_x_ref[-1] if len(drawdown_x_ref) > 0 else None
+            recovery_last_x = recovery_x_ref[-1] if len(recovery_x_ref) > 0 else None
+
+            default_states = [True, True, True, True, True, True]
+            trace_positions = []
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_underwater.index,
+                    y=visible_underwater,
+                    mode="lines",
+                    name=f"{window}-Day Underwater",
+                    line=dict(color="#0ea5e9", width=2),
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[0]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_drawdown.index,
+                    y=visible_drawdown,
+                    mode="lines",
+                    name=f"{window}-Day Textbook Max Drawdown",
+                    line=dict(color="#f97316", width=2, dash="dot"),
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[1]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=drawdown_x_ref,
+                    y=[underwater_p05] * len(drawdown_x_ref),
+                    mode="lines",
+                    name="Underwater 5th Percentile",
+                    line=dict(color="rgba(14, 165, 233, 0.55)", width=1.5, dash="dash"),
+                    hovertemplate="Underwater 5th percentile: %{y:.1%}<extra></extra>",
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[2]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=drawdown_x_ref,
+                    y=[drawdown_p05] * len(drawdown_x_ref),
+                    mode="lines",
+                    name="Textbook 5th Percentile",
+                    line=dict(color="rgba(249, 115, 22, 0.55)", width=1.5, dash="dash"),
+                    hovertemplate="Textbook 5th percentile: %{y:.1%}<extra></extra>",
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[3]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=visible_recovery.index,
+                    y=visible_recovery,
+                    mode="lines",
+                    name=f"{window}-Day Recovery Time",
+                    line=dict(color="#22c55e", width=2),
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=3,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[4]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=recovery_x_ref,
+                    y=[recovery_p95] * len(recovery_x_ref),
+                    mode="lines",
+                    name="Recovery 95th Percentile",
+                    line=dict(color="rgba(34, 197, 94, 0.60)", width=1.5, dash="dash"),
+                    hovertemplate="Recovery 95th percentile: %{y:.0f} sessions<extra></extra>",
+                    visible=window == default_window,
+                    showlegend=False,
+                ),
+                row=3,
+                col=1,
+            )
+            drawdown_trace_indices.append(len(fig.data) - 1)
+            trace_positions.append((len(drawdown_trace_indices) - 1, default_states[5]))
+
+            line_annotations = [
+                _line_annotation(
+                    x=visible_underwater.index[-1] if not visible_underwater.empty else None,
+                    y=visible_underwater.iloc[-1] if not visible_underwater.empty else np.nan,
+                    text="Underwater",
+                    color="#0ea5e9",
+                    xref="x2",
+                    yref="y2",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=visible_drawdown.index[-1] if not visible_drawdown.empty else None,
+                    y=visible_drawdown.iloc[-1] if not visible_drawdown.empty else np.nan,
+                    text="Textbook Max DD",
+                    color="#f97316",
+                    xref="x2",
+                    yref="y2",
+                    yshift=-12,
+                ),
+                _line_annotation(
+                    x=drawdown_last_x,
+                    y=underwater_p05,
+                    text="Underwater 5th pct",
+                    color="rgba(14, 165, 233, 0.90)",
+                    xref="x2",
+                    yref="y2",
+                    yshift=-12,
+                ),
+                _line_annotation(
+                    x=drawdown_last_x,
+                    y=drawdown_p05,
+                    text="Textbook 5th pct",
+                    color="rgba(249, 115, 22, 0.90)",
+                    xref="x2",
+                    yref="y2",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=visible_recovery.index[-1] if not visible_recovery.empty else None,
+                    y=visible_recovery.iloc[-1] if not visible_recovery.empty else np.nan,
+                    text="Recovery Time",
+                    color="#22c55e",
+                    xref="x3",
+                    yref="y3",
+                    yshift=12,
+                ),
+                _line_annotation(
+                    x=recovery_last_x,
+                    y=recovery_p95,
+                    text="Recovery 95th pct",
+                    color="rgba(34, 197, 94, 0.90)",
+                    xref="x3",
+                    yref="y3",
+                    yshift=-12,
+                ),
+            ]
+
+            trace_state_map[window] = trace_positions
+            annotation_map[window] = static_annotations + [annotation for annotation in line_annotations if annotation is not None] + [
+                dict(
+                    x=0.995,
+                    y=0.95,
+                    xref="paper",
+                    yref="y2 domain",
+                    xanchor="right",
+                    yanchor="top",
+                    showarrow=False,
+                    align="right",
+                    font=dict(size=11),
+                    bgcolor="rgba(15, 23, 42, 0.72)",
+                    bordercolor="rgba(148, 163, 184, 0.35)",
+                    borderwidth=1,
+                    text=(
+                        f"Latest underwater: {underwater_current:.1%} ({_format_percentile(underwater_rank)})"
+                        "<br>"
+                        f"Latest textbook: {drawdown_current:.1%} ({_format_percentile(drawdown_rank)})"
+                    ),
+                ),
+                dict(
+                    x=0.995,
+                    y=0.95,
+                    xref="paper",
+                    yref="y3 domain",
+                    xanchor="right",
+                    yanchor="top",
+                    showarrow=False,
+                    align="right",
+                    font=dict(size=11),
+                    bgcolor="rgba(15, 23, 42, 0.72)",
+                    bordercolor="rgba(148, 163, 184, 0.35)",
+                    borderwidth=1,
+                    text=(
+                        f"Latest completed recovery: {recovery_current:.0f} sessions ({_format_percentile(recovery_rank)})"
+                        if not pd.isna(recovery_current)
+                        else "Latest completed recovery: n/a"
+                    ),
+                ),
+            ]
+
+        fig.update_xaxes(
+            title_text="Date",
+            type="date",
+            rangeslider=dict(visible=False),
+            showgrid=True,
+            zeroline=False,
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            showticklabels=False,
+            row=1,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Price", autorange=True, fixedrange=False, row=1, col=1)
+        fig.update_xaxes(
+            title_text="Date",
+            type="date",
+            showgrid=True,
+            zeroline=False,
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            matches="x",
+            showticklabels=False,
+            row=2,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Drawdown", tickformat=".0%", row=2, col=1)
+        fig.update_xaxes(
+            title_text="Date",
+            type="date",
+            rangebreaks=[dict(bounds=["sat", "mon"])],
+            matches="x",
+            showticklabels=True,
+            row=3,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Sessions", rangemode="tozero", row=3, col=1)
+        fig.add_hline(
+            y=0,
+            row=2,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(148, 163, 184, 0.45)",
+            line_width=1,
+        )
+
+        window_buttons = []
+        for window in window_options:
+            visibility = [False] * len(drawdown_trace_indices)
+            for trace_position, state in trace_state_map[window]:
+                visibility[trace_position] = state
+            window_buttons.append(
+                dict(
+                    label=f"{window}-Day",
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {
+                            "title": self._header_title(_window_title(window)),
+                            "annotations": annotation_map[window],
+                        },
+                        drawdown_trace_indices,
+                    ],
+                )
+            )
+
+        global_start_candidates = []
+        global_end_candidates = []
+        if candlestick_bundle["period_start"] is not None and candlestick_bundle["period_end"] is not None:
+            global_start_candidates.append(candlestick_bundle["period_start"])
+            global_end_candidates.append(candlestick_bundle["period_end"])
+        available_indexes = [series.index for series in drawdown_series_map.values() if not series.empty]
+        recovery_indexes = [series.index for series in recovery_series_map.values() if not series.empty]
+        if available_indexes:
+            global_start_candidates.append(min(index[0] for index in available_indexes))
+            global_end_candidates.append(max(index[-1] for index in available_indexes))
+        if recovery_indexes:
+            global_start_candidates.append(min(index[0] for index in recovery_indexes))
+            global_end_candidates.append(max(index[-1] for index in recovery_indexes))
+
+        updatemenus = [
+            self._dropdown_menu(
+                buttons=window_buttons,
+                x=0.0,
+                active=window_options.index(default_window),
+            )
+        ]
+
+        if global_start_candidates and global_end_candidates:
+            global_start = min(global_start_candidates)
+            global_end = max(global_end_candidates)
+
+            def _visible_drawdown_axis_series(start=None, end=None):
+                axis_series = []
+                for window in window_options:
+                    underwater_slice = _slice_visible(underwater_series_map.get(window), start=start, end=end)
+                    drawdown_slice = _slice_visible(drawdown_series_map.get(window), start=start, end=end)
+                    if not underwater_slice.empty:
+                        axis_series.append(underwater_slice)
+                        underwater_percentile = _constant_axis_series(underwater_percentile_map.get(window))
+                        if underwater_percentile is not None:
+                            axis_series.append(underwater_percentile)
+                    if not drawdown_slice.empty:
+                        axis_series.append(drawdown_slice)
+                        drawdown_percentile = _constant_axis_series(drawdown_percentile_map.get(window))
+                        if drawdown_percentile is not None:
+                            axis_series.append(drawdown_percentile)
+                return axis_series
+
+            def _visible_recovery_axis_series(start=None, end=None):
+                axis_series = []
+                for window in window_options:
+                    recovery_slice = _slice_visible(recovery_series_map.get(window), start=start, end=end)
+                    if recovery_slice.empty:
+                        continue
+                    axis_series.append(recovery_slice)
+                    recovery_percentile = _constant_axis_series(recovery_percentile_map.get(window))
+                    if recovery_percentile is not None:
+                        axis_series.append(recovery_percentile)
+                return axis_series
+
+            def _combined_range(offset=None):
+                visible_start = global_start if offset is None else max(global_start, global_end - offset)
+                new_range = CandleStickPlotter.build_time_range(global_start, global_end, offset)
+                layout_updates = {
+                    "xaxis.range": new_range,
+                    "xaxis2.range": new_range,
+                    "xaxis3.range": new_range,
+                }
+                price_range = CandleStickPlotter.build_candlestick_y_range(
+                    candlestick_bundle,
+                    start=visible_start,
+                    end=global_end,
+                )
+                if price_range is not None:
+                    layout_updates["yaxis.range"] = price_range
+
+                drawdown_range = CandleStickPlotter.build_numeric_axis_range(
+                    _visible_drawdown_axis_series(start=visible_start, end=global_end),
+                    include_zero=True,
+                    padding_ratio=0.08,
+                )
+                if drawdown_range is not None:
+                    layout_updates["yaxis2.range"] = drawdown_range
+
+                recovery_range = CandleStickPlotter.build_numeric_axis_range(
+                    _visible_recovery_axis_series(start=visible_start, end=global_end),
+                    include_zero=True,
+                    padding_ratio=0.08,
+                )
+                if recovery_range is not None:
+                    layout_updates["yaxis3.range"] = recovery_range
+
+                return layout_updates
+
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=[
+                        dict(label=label, method="relayout", args=[_combined_range(offset)])
+                        for label, offset in timeframe_options
+                    ],
+                    x=0.18,
+                    active=default_timeframe_index,
+                )
+            )
+
+            initial_range = CandleStickPlotter.build_time_range(
+                global_start,
+                global_end,
+                timeframe_options[default_timeframe_index][1],
+            )
+            fig.update_xaxes(range=initial_range, row=1, col=1)
+            fig.update_xaxes(range=initial_range, row=2, col=1)
+            fig.update_xaxes(range=initial_range, row=3, col=1)
+            initial_layout = _combined_range(timeframe_options[default_timeframe_index][1])
+            if "yaxis.range" in initial_layout:
+                fig.update_yaxes(range=initial_layout["yaxis.range"], row=1, col=1)
+            if "yaxis2.range" in initial_layout:
+                fig.update_yaxes(range=initial_layout["yaxis2.range"], row=2, col=1)
+            if "yaxis3.range" in initial_layout:
+                fig.update_yaxes(range=initial_layout["yaxis3.range"], row=3, col=1)
+
+        if overlay_trace_indices:
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=[
+                        dict(
+                            label="Bollinger",
+                            method="update",
+                            args=[
+                                {
+                                    "visible": ([True] * len(candlestick_overlay_groups["bollinger"])) +
+                                    ([False] * len(candlestick_overlay_groups["mapped_mdd"]))
+                                },
+                                {},
+                                overlay_trace_indices,
+                            ],
+                        ),
+                        dict(
+                            label="Mapped MDD",
+                            method="update",
+                            args=[
+                                {
+                                    "visible": ([False] * len(candlestick_overlay_groups["bollinger"])) +
+                                    ([True] * len(candlestick_overlay_groups["mapped_mdd"]))
+                                },
+                                {},
+                                overlay_trace_indices,
+                            ],
+                        ),
+                    ],
+                    x=0.38,
+                    active=0 if default_overlay == "bollinger" else 1,
+                )
+            )
+
+        fig.update_layout(
+            updatemenus=updatemenus,
+            title=self._header_title(_window_title(default_window)),
+            height=1650,
+            margin=dict(t=220, r=max(candlestick_bundle["right_margin"], 240)),
+            template=template,
+            showlegend=False,
+            hovermode="x unified",
+            annotations=annotation_map[default_window],
+        )
+        return fig
+
     def plot_distribution_shape_zscores(
         self,
         metrics_by_window,
@@ -1284,9 +2620,10 @@ class LineChartPlotter:
         default_window=None,
         ticker_label="Asset",
         template="plotly_dark",
+        include_return_panel=True,
     ):
         """
-        Plot daily returns with rolling quantile bands plus skew/kurtosis/gini z-scores.
+        Plot skew/kurtosis/gini z-scores, optionally with a leading daily-return panel.
         """
         if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
             raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
@@ -1306,17 +2643,34 @@ class LineChartPlotter:
         if default_window not in window_options:
             default_window = self._preferred_numeric_window(window_options) or window_options[0]
 
-        fig = make_subplots(
-            rows=4,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.05,
-            subplot_titles=(
+        if include_return_panel:
+            subplot_titles = (
                 "Daily Returns with Rolling Quantile Bands",
                 "Rolling Skew Z-Score",
                 "Rolling Excess Kurtosis Z-Score",
                 "Rolling Gini Coefficient Z-Score",
-            ),
+            )
+            row_count = 4
+            row_map = {"returns": 1, "skew": 2, "kurtosis": 3, "gini": 4}
+            figure_height = 1450
+            figure_title = f"{ticker_label} Daily Returns & Distribution Z-Scores ({default_window}-Day Window)"
+        else:
+            subplot_titles = (
+                "Rolling Skew Z-Score",
+                "Rolling Excess Kurtosis Z-Score",
+                "Rolling Gini Coefficient Z-Score",
+            )
+            row_count = 3
+            row_map = {"skew": 1, "kurtosis": 2, "gini": 3}
+            figure_height = 1150
+            figure_title = f"{ticker_label} Distribution Z-Scores ({default_window}-Day Window)"
+
+        fig = make_subplots(
+            rows=row_count,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            subplot_titles=subplot_titles,
         )
 
         metric_colors = {
@@ -1345,97 +2699,98 @@ class LineChartPlotter:
 
             trace_start = len(fig.data)
 
-            return_colors = np.where(
-                daily_return_series >= 0,
-                "rgba(34, 197, 94, 0.45)",
-                "rgba(239, 68, 68, 0.45)",
-            ).tolist()
+            if include_return_panel:
+                return_colors = np.where(
+                    daily_return_series >= 0,
+                    "rgba(34, 197, 94, 0.45)",
+                    "rgba(239, 68, 68, 0.45)",
+                ).tolist()
 
-            fig.add_trace(
-                go.Bar(
-                    x=daily_return_series.index,
-                    y=daily_return_series,
-                    name=f"{window}-Day 1D Returns",
-                    marker_color=return_colors,
-                    visible=visible,
-                    opacity=0.75,
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Bar(
+                        x=daily_return_series.index,
+                        y=daily_return_series,
+                        name=f"{window}-Day 1D Returns",
+                        marker_color=return_colors,
+                        visible=visible,
+                        opacity=0.75,
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=return_q90.index,
-                    y=return_q90,
-                    mode="lines",
-                    name=f"{window}-Day 90th Percentile",
-                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
-                    visible=visible,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Scatter(
+                        x=return_q90.index,
+                        y=return_q90,
+                        mode="lines",
+                        name=f"{window}-Day 90th Percentile",
+                        line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                        visible=visible,
+                        hoverinfo="skip",
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=return_q10.index,
-                    y=return_q10,
-                    mode="lines",
-                    name=f"{window}-Day 10th Percentile",
-                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
-                    fill="tonexty",
-                    fillcolor=metric_colors["outer_band"],
-                    visible=visible,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Scatter(
+                        x=return_q10.index,
+                        y=return_q10,
+                        mode="lines",
+                        name=f"{window}-Day 10th Percentile",
+                        line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                        fill="tonexty",
+                        fillcolor=metric_colors["outer_band"],
+                        visible=visible,
+                        hoverinfo="skip",
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=return_q75.index,
-                    y=return_q75,
-                    mode="lines",
-                    name=f"{window}-Day 75th Percentile",
-                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
-                    visible=visible,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Scatter(
+                        x=return_q75.index,
+                        y=return_q75,
+                        mode="lines",
+                        name=f"{window}-Day 75th Percentile",
+                        line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                        visible=visible,
+                        hoverinfo="skip",
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=return_q25.index,
-                    y=return_q25,
-                    mode="lines",
-                    name=f"{window}-Day 25th Percentile",
-                    line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
-                    fill="tonexty",
-                    fillcolor=metric_colors["inner_band"],
-                    visible=visible,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Scatter(
+                        x=return_q25.index,
+                        y=return_q25,
+                        mode="lines",
+                        name=f"{window}-Day 25th Percentile",
+                        line=dict(color="rgba(148, 163, 184, 0.0)", width=1),
+                        fill="tonexty",
+                        fillcolor=metric_colors["inner_band"],
+                        visible=visible,
+                        hoverinfo="skip",
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=return_median.index,
-                    y=return_median,
-                    mode="lines",
-                    name=f"{window}-Day Rolling Median",
-                    line=dict(color=metric_colors["return_median"], width=1.6, dash="dash"),
-                    visible=visible,
-                ),
-                row=1,
-                col=1,
-            )
+                fig.add_trace(
+                    go.Scatter(
+                        x=return_median.index,
+                        y=return_median,
+                        mode="lines",
+                        name=f"{window}-Day Rolling Median",
+                        line=dict(color=metric_colors["return_median"], width=1.6, dash="dash"),
+                        visible=visible,
+                    ),
+                    row=row_map["returns"],
+                    col=1,
+                )
 
             fig.add_trace(
                 go.Scatter(
@@ -1446,7 +2801,7 @@ class LineChartPlotter:
                     line=dict(color=metric_colors["skew"]),
                     visible=visible,
                 ),
-                row=2,
+                row=row_map["skew"],
                 col=1,
             )
 
@@ -1459,7 +2814,7 @@ class LineChartPlotter:
                     line=dict(color=metric_colors["kurtosis"]),
                     visible=visible,
                 ),
-                row=3,
+                row=row_map["kurtosis"],
                 col=1,
             )
 
@@ -1472,7 +2827,7 @@ class LineChartPlotter:
                     line=dict(color=metric_colors["gini"]),
                     visible=visible,
                 ),
-                row=4,
+                row=row_map["gini"],
                 col=1,
             )
 
@@ -1485,23 +2840,23 @@ class LineChartPlotter:
                     zscore_index_candidates.append(series.index)
 
         if traces_per_window is None or traces_per_window <= 0:
-            traces_per_window = 9
+            traces_per_window = 9 if include_return_panel else 3
 
         x_ref = max(zscore_index_candidates, key=len, default=pd.Index([]))
         if len(x_ref) > 0:
-            for row in (2, 4):
+            for row in (row_map["skew"], row_map["gini"]):
                 add_mean_reference_line(fig, row, x_ref)
                 add_sigma_reference_lines(
                     fig,
                     row,
                     x_ref,
-                    levels=(1, 1.5, 2, 3) if row == 2 else (1, 2, 3),
+                    levels=(1, 1.5, 2, 3) if row == row_map["skew"] else (1, 2, 3),
                 )
-            add_mean_reference_line(fig, 3, x_ref)
+            add_mean_reference_line(fig, row_map["kurtosis"], x_ref)
             for value in (-1.5, -1, -0.5, 1, 2, 3):
                 fig.add_hline(
                     y=value,
-                    row=3,
+                    row=row_map["kurtosis"],
                     col=1,
                     line_dash="dot",
                     line_color="rgba(220, 220, 220, 0.55)",
@@ -1530,21 +2885,22 @@ class LineChartPlotter:
                 )
             )
 
-        fig.update_yaxes(title_text="1D Return", tickformat=".1%", row=1, col=1)
-        fig.update_yaxes(title_text="Skew Z", row=2, col=1)
-        fig.update_yaxes(title_text="Excess Kurtosis Z", row=3, col=1)
-        fig.update_yaxes(title_text="Gini Z", row=4, col=1)
-        fig.add_hline(
-            y=0,
-            row=1,
-            col=1,
-            line_dash="dash",
-            line_color="rgba(248, 250, 252, 0.45)",
-            line_width=1,
-        )
+        if include_return_panel:
+            fig.update_yaxes(title_text="1D Return", tickformat=".1%", row=row_map["returns"], col=1)
+            fig.add_hline(
+                y=0,
+                row=row_map["returns"],
+                col=1,
+                line_dash="dash",
+                line_color="rgba(248, 250, 252, 0.45)",
+                line_width=1,
+            )
+        fig.update_yaxes(title_text="Skew Z", row=row_map["skew"], col=1)
+        fig.update_yaxes(title_text="Excess Kurtosis Z", row=row_map["kurtosis"], col=1)
+        fig.update_yaxes(title_text="Gini Z", row=row_map["gini"], col=1)
         add_horizontal_zone(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=-3,
             y1=-1.5,
@@ -1555,7 +2911,7 @@ class LineChartPlotter:
         )
         add_horizontal_zone(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=-1.5,
             y1=1.5,
@@ -1566,7 +2922,7 @@ class LineChartPlotter:
         )
         add_horizontal_zone(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=-1,
             y1=1,
@@ -1577,7 +2933,7 @@ class LineChartPlotter:
         )
         add_horizontal_zone(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=1.5,
             y1=3,
@@ -1588,7 +2944,7 @@ class LineChartPlotter:
         )
         add_zone_annotation(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=-1.5,
             y1=-1,
@@ -1597,7 +2953,7 @@ class LineChartPlotter:
         )
         add_zone_annotation(
             fig,
-            row=2,
+            row=row_map["skew"],
             col=1,
             y0=1,
             y1=1.5,
@@ -1606,7 +2962,7 @@ class LineChartPlotter:
         )
         add_horizontal_zone(
             fig,
-            row=3,
+            row=row_map["kurtosis"],
             col=1,
             y0=-1.5,
             y1=-1,
@@ -1617,7 +2973,7 @@ class LineChartPlotter:
         )
         add_horizontal_zone(
             fig,
-            row=3,
+            row=row_map["kurtosis"],
             col=1,
             y0=-1,
             y1=-0.5,
@@ -1634,11 +2990,1703 @@ class LineChartPlotter:
                     x=0.0,
                 )
             ],
-            title=self._header_title(f"{ticker_label} Daily Returns & Distribution Z-Scores ({default_window}-Day Window)"),
-            height=1450,
+            title=self._header_title(figure_title),
+            height=figure_height,
             margin=self._header_margin(),
             template=template,
             showlegend=False,
+        )
+        return fig
+
+    def plot_value_at_risk_profile(
+        self,
+        metrics_by_window,
+        window_options=None,
+        confidence_levels=None,
+        default_window=None,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot daily returns, rolling historical VaR / CVaR (Expected Shortfall), and breach diagnostics.
+        """
+        if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
+            raise ValueError("metrics_by_window must be a non-empty mapping of window -> confidence -> metric map.")
+
+        if window_options is None:
+            window_options = list(metrics_by_window.keys())
+        else:
+            try:
+                window_options = [int(w) for w in window_options]
+            except Exception as exc:
+                raise ValueError("window_options must be iterable integers.") from exc
+            window_options = [w for w in window_options if w in metrics_by_window]
+
+        if not window_options:
+            raise ValueError("No valid window options available for plotting.")
+
+        if default_window not in window_options:
+            default_window = self._preferred_numeric_window(window_options) or window_options[0]
+
+        if confidence_levels is None:
+            confidence_levels = sorted(metrics_by_window.get(default_window, {}).keys())
+        else:
+            try:
+                confidence_levels = sorted(
+                    float(level) / 100.0 if float(level) > 1 else float(level)
+                    for level in confidence_levels
+                )
+            except Exception as exc:
+                raise ValueError("confidence_levels must be iterable numeric confidence values.") from exc
+
+        if not confidence_levels:
+            raise ValueError("No valid confidence levels available for plotting.")
+
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.42, 0.31, 0.27],
+            subplot_titles=(
+                "Close-to-Close Returns with Historical Downside VaR Thresholds",
+                "Rolling Close-to-Close Downside Loss Forecasts: VaR and CVaR",
+                "Rolling Close-to-Close Downside Breach Rate vs Expected",
+            ),
+        )
+
+        palette = ["#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#84cc16", "#ec4899"]
+        confidence_styles = {}
+        for idx, confidence in enumerate(confidence_levels):
+            base_color = palette[idx % len(palette)]
+            confidence_styles[confidence] = {
+                "var": base_color,
+                "es": px.colors.qualitative.Dark24[idx % len(px.colors.qualitative.Dark24)],
+                "breach": base_color,
+            }
+
+        traces_per_window = None
+        index_candidates = []
+
+        for window in window_options:
+            visible = window == default_window
+            trace_start = len(fig.data)
+            window_metric_map = metrics_by_window.get(window, {})
+
+            default_metric_set = window_metric_map.get(
+                confidence_levels[0],
+                next(iter(window_metric_map.values()), {}),
+            )
+            daily_return_series = default_metric_set.get("daily_returns", pd.Series(dtype=float)).dropna()
+            return_colors = np.where(
+                daily_return_series >= 0,
+                "rgba(34, 197, 94, 0.45)",
+                "rgba(239, 68, 68, 0.45)",
+            ).tolist()
+
+            fig.add_trace(
+                go.Bar(
+                    x=daily_return_series.index,
+                    y=daily_return_series,
+                    name="1D Returns",
+                    marker_color=return_colors,
+                    visible=visible,
+                    opacity=0.75,
+                    showlegend=False,
+                ),
+                row=1,
+                col=1,
+            )
+
+            if not daily_return_series.empty:
+                index_candidates.append(daily_return_series.index)
+
+            for confidence in confidence_levels:
+                metric_set = window_metric_map.get(confidence, {})
+                label = f"{confidence:.0%}"
+                style = confidence_styles[confidence]
+
+                var_threshold = metric_set.get("var_threshold", pd.Series(dtype=float)).dropna()
+                var_loss = metric_set.get("var", pd.Series(dtype=float)).dropna()
+                expected_shortfall = metric_set.get("expected_shortfall", pd.Series(dtype=float)).dropna()
+                breaches = metric_set.get("breaches", pd.Series(dtype=float)).dropna()
+                rolling_breach_rate = metric_set.get("rolling_breach_rate", pd.Series(dtype=float)).dropna()
+                expected_breach_rate = metric_set.get("expected_breach_rate", pd.Series(dtype=float)).dropna()
+
+                breach_index = breaches.index[breaches.astype(bool)] if not breaches.empty else pd.Index([])
+                breach_returns = daily_return_series.reindex(breach_index).dropna()
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=var_threshold.index,
+                        y=var_threshold,
+                        mode="lines",
+                        name=f"{label} Close-to-Close VaR Threshold",
+                        line=dict(color=style["var"], width=2),
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=breach_returns.index,
+                        y=breach_returns,
+                        mode="markers",
+                        name=f"{label} Close-to-Close Breaches",
+                        marker=dict(color=style["breach"], size=7, symbol="x"),
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=var_loss.index,
+                        y=var_loss,
+                        mode="lines",
+                        name=f"{label} Close-to-Close VaR",
+                        line=dict(color=style["var"], width=2),
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=expected_shortfall.index,
+                        y=expected_shortfall,
+                        mode="lines",
+                        name=f"{label} Close-to-Close CVaR",
+                        line=dict(color=style["es"], width=2, dash="dash"),
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolling_breach_rate.index,
+                        y=rolling_breach_rate,
+                        mode="lines",
+                        name=f"{label} Close-to-Close Breach Rate",
+                        line=dict(color=style["var"], width=2),
+                        visible=visible,
+                    ),
+                    row=3,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=expected_breach_rate.index,
+                        y=expected_breach_rate,
+                        mode="lines",
+                        name=f"{label} Expected Close-to-Close Breach Rate",
+                        line=dict(color=style["es"], width=1.5, dash="dot"),
+                        visible=visible,
+                        showlegend=False,
+                    ),
+                    row=3,
+                    col=1,
+                )
+
+                for series in (
+                    var_threshold,
+                    var_loss,
+                    expected_shortfall,
+                    rolling_breach_rate,
+                    expected_breach_rate,
+                ):
+                    if not series.empty:
+                        index_candidates.append(series.index)
+
+            added_traces = len(fig.data) - trace_start
+            if traces_per_window is None:
+                traces_per_window = added_traces
+
+        if traces_per_window is None or traces_per_window <= 0:
+            raise ValueError("Unable to build VaR traces from the supplied metric payload.")
+
+        total_traces = len(fig.data)
+        buttons = []
+        for idx, window in enumerate(window_options):
+            visibility = build_visibility_mask(
+                total_traces=total_traces,
+                active_window_index=idx,
+                traces_per_window=traces_per_window,
+                constant_trace_indices=[],
+            )
+            buttons.append(
+                dict(
+                    label=str(window),
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {"title": self._header_title(f"{ticker_label} Historical Close-to-Close Downside VaR / CVaR Profile ({window}-Day Window)")},
+                    ],
+                )
+            )
+
+        fig.update_yaxes(title_text="Close-to-Close Return", tickformat=".1%", row=1, col=1)
+        fig.update_yaxes(title_text="Downside Loss Forecast", tickformat=".1%", row=2, col=1)
+        fig.update_yaxes(title_text="Downside Breach Rate", tickformat=".1%", row=3, col=1)
+        fig.update_xaxes(title_text="Date", row=3, col=1)
+        fig.add_hline(
+            y=0,
+            row=1,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(248, 250, 252, 0.40)",
+            line_width=1,
+        )
+
+        updatemenus = [self._dropdown_menu(buttons=buttons, x=0.0)]
+        if index_candidates:
+            global_start = min(index[0] for index in index_candidates if len(index) > 0)
+            global_end = max(index[-1] for index in index_candidates if len(index) > 0)
+            default_start = max(global_start, global_end - pd.DateOffset(years=3))
+            fig.update_xaxes(range=[default_start, global_end])
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=build_time_range_buttons(global_start, global_end),
+                    x=0.18,
+                )
+            )
+
+        fig.update_layout(
+            updatemenus=updatemenus,
+            title=self._header_title(f"{ticker_label} Historical Close-to-Close Downside VaR / CVaR Profile ({default_window}-Day Window)"),
+            height=1200,
+            margin=self._header_margin(),
+            template=template,
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        return fig
+
+    def plot_session_probability_cone(
+        self,
+        cone_context,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot an open-anchored end-of-day probability cone for the latest session using
+        trailing open-to-close returns, with VaR / CVaR downside markers.
+        """
+        required_keys = {
+            "session_date",
+            "window",
+            "effective_window",
+            "anchor_price",
+            "latest_price",
+            "sample_returns",
+            "interval_confidence_levels",
+            "var_confidence_levels",
+            "intervals",
+            "var_levels",
+            "median_return",
+            "median_price",
+        }
+        if not isinstance(cone_context, Mapping):
+            raise TypeError("cone_context must be a mapping.")
+        missing = [key for key in required_keys if key not in cone_context]
+        if missing:
+            raise ValueError(f"cone_context missing required keys: {missing}")
+
+        interval_levels = sorted(cone_context["interval_confidence_levels"], reverse=True)
+        var_levels = sorted(cone_context["var_confidence_levels"])
+        interval_map = cone_context["intervals"]
+        var_level_map = cone_context["var_levels"]
+        sample_returns = pd.Series(cone_context["sample_returns"]).dropna()
+
+        if sample_returns.empty:
+            raise ValueError("cone_context sample_returns must contain at least one return observation.")
+
+        anchor_price = float(cone_context["anchor_price"])
+        latest_price = float(cone_context["latest_price"])
+        median_price = float(cone_context["median_price"])
+        session_date = pd.Timestamp(cone_context["session_date"])
+        effective_window = int(cone_context["effective_window"])
+        requested_window = int(cone_context["window"])
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            vertical_spacing=0.12,
+            row_heights=[0.58, 0.42],
+            subplot_titles=(
+                "Open-Anchored Projected Close Cone (Open-to-Close)",
+                "Trailing Open-to-Close Return Distribution",
+            ),
+        )
+
+        band_colors = [
+            "rgba(59, 130, 246, 0.18)",
+            "rgba(34, 197, 94, 0.22)",
+            "rgba(245, 158, 11, 0.26)",
+            "rgba(239, 68, 68, 0.30)",
+        ]
+        band_line_colors = [
+            "rgba(59, 130, 246, 0.75)",
+            "rgba(34, 197, 94, 0.82)",
+            "rgba(245, 158, 11, 0.86)",
+            "rgba(239, 68, 68, 0.88)",
+        ]
+
+        close_end_prices = [anchor_price, median_price, latest_price]
+        for confidence in interval_levels:
+            price_band = interval_map.get(confidence, {})
+            close_end_prices.extend(
+                [
+                    float(price_band.get("lower_price", np.nan)),
+                    float(price_band.get("upper_price", np.nan)),
+                ]
+            )
+        for confidence in var_levels:
+            tail_band = var_level_map.get(confidence, {})
+            close_end_prices.extend(
+                [
+                    float(tail_band.get("var_price", np.nan)),
+                    float(tail_band.get("expected_shortfall_price", np.nan)),
+                ]
+            )
+
+        valid_prices = [price for price in close_end_prices if np.isfinite(price)]
+        if not valid_prices:
+            raise ValueError("cone_context does not contain any finite price levels to plot.")
+        price_min = min(valid_prices)
+        price_max = max(valid_prices)
+        price_padding = max((price_max - price_min) * 0.10, anchor_price * 0.01)
+
+        for idx, confidence in enumerate(interval_levels):
+            price_band = interval_map[confidence]
+            fill_color = band_colors[idx % len(band_colors)]
+            line_color = band_line_colors[idx % len(band_line_colors)]
+            fig.add_trace(
+                go.Scatter(
+                    x=[0.0, 1.0, 1.0, 0.0, 0.0],
+                    y=[
+                        anchor_price,
+                        price_band["upper_price"],
+                        price_band["lower_price"],
+                        anchor_price,
+                        anchor_price,
+                    ],
+                    mode="lines",
+                    line=dict(color=line_color, width=1.5),
+                    fill="toself",
+                    fillcolor=fill_color,
+                    name=f"{confidence:.0%} Open-to-Close Central Range",
+                    hovertemplate=(
+                        f"{confidence:.0%} Open-to-Close Central Range"
+                        "<br>Lower Close: %{customdata[0]:,.2f}"
+                        "<br>Upper Close: %{customdata[1]:,.2f}"
+                        "<extra></extra>"
+                    ),
+                    customdata=[
+                        [price_band["lower_price"], price_band["upper_price"]],
+                        [price_band["lower_price"], price_band["upper_price"]],
+                        [price_band["lower_price"], price_band["upper_price"]],
+                        [price_band["lower_price"], price_band["upper_price"]],
+                        [price_band["lower_price"], price_band["upper_price"]],
+                    ],
+                    showlegend=True,
+                ),
+                row=1,
+                col=1,
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0, 1.0],
+                y=[anchor_price, median_price],
+                mode="lines+markers",
+                name="Median Close",
+                line=dict(color="#f8fafc", width=2, dash="dash"),
+                marker=dict(size=8, color="#f8fafc"),
+                hovertemplate="Median Close: %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0],
+                y=[anchor_price],
+                mode="markers+text",
+                name="Session Open",
+                marker=dict(size=10, color="#22c55e", symbol="diamond"),
+                text=[f"Open {anchor_price:,.2f}"],
+                textposition="top left",
+                hovertemplate="Session Open: %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[1.0],
+                y=[latest_price],
+                mode="markers+text",
+                name="Latest Session Price",
+                marker=dict(size=9, color="#38bdf8", symbol="circle"),
+                text=[f"Last {latest_price:,.2f}"],
+                textposition="middle right",
+                hovertemplate="Latest Session Price: %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+        var_marker_symbols = ["triangle-down", "square"]
+        for idx, confidence in enumerate(var_levels):
+            tail_band = var_level_map[confidence]
+            base_color = "#ef4444" if idx == 0 else "#b91c1c"
+            fig.add_trace(
+                go.Scatter(
+                    x=[1.0],
+                    y=[tail_band["var_price"]],
+                    mode="markers+text",
+                    name=f"{confidence:.0%} Open-to-Close VaR Floor",
+                    marker=dict(size=11, color=base_color, symbol=var_marker_symbols[idx % len(var_marker_symbols)]),
+                    text=[f"{confidence:.0%} VaR Floor {tail_band['var_price']:,.2f}"],
+                    textposition="middle right",
+                    hovertemplate=(
+                        f"{confidence:.0%} Open-to-Close VaR Floor"
+                        "<br>Close Price: %{y:,.2f}"
+                        f"<br>Return Threshold: {tail_band['var_return']:.2%}"
+                        "<extra></extra>"
+                    ),
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[1.0],
+                    y=[tail_band["expected_shortfall_price"]],
+                    mode="markers+text",
+                    name=f"{confidence:.0%} Open-to-Close CVaR Floor",
+                    marker=dict(size=10, color=base_color, symbol="x"),
+                    text=[f"{confidence:.0%} CVaR Floor {tail_band['expected_shortfall_price']:,.2f}"],
+                    textposition="middle right",
+                    hovertemplate=(
+                        f"{confidence:.0%} Open-to-Close CVaR Floor"
+                        "<br>Close Price: %{y:,.2f}"
+                        f"<br>Expected Shortfall: {tail_band['expected_shortfall_return']:.2%}"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                ),
+                row=1,
+                col=1,
+            )
+
+        fig.add_vline(
+            x=1.0,
+            row=1,
+            col=1,
+            line_dash="dot",
+            line_color="rgba(248, 250, 252, 0.40)",
+            line_width=1,
+        )
+        fig.add_hline(
+            y=anchor_price,
+            row=1,
+            col=1,
+            line_dash="dot",
+            line_color="rgba(34, 197, 94, 0.45)",
+            line_width=1,
+        )
+
+        histogram_values = sample_returns.mul(100.0)
+        fig.add_trace(
+            go.Histogram(
+                x=histogram_values,
+                nbinsx=min(max(effective_window // 8, 20), 60),
+                name="200-Session Open-to-Close Returns",
+                marker_color="rgba(59, 130, 246, 0.65)",
+                opacity=0.85,
+                hovertemplate="Return: %{x:.2f}%<br>Count: %{y}<extra></extra>",
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.add_vline(
+            x=cone_context["median_return"] * 100.0,
+            row=2,
+            col=1,
+            line_dash="dash",
+            line_color="#f8fafc",
+            line_width=2,
+        )
+        for idx, confidence in enumerate(var_levels):
+            tail_band = var_level_map[confidence]
+            base_color = "#ef4444" if idx == 0 else "#b91c1c"
+            fig.add_vline(
+                x=tail_band["var_return"] * 100.0,
+                row=2,
+                col=1,
+                line_dash="dash",
+                line_color=base_color,
+                line_width=2,
+            )
+            fig.add_vline(
+                x=tail_band["expected_shortfall_return"] * 100.0,
+                row=2,
+                col=1,
+                line_dash="dot",
+                line_color=base_color,
+                line_width=2,
+            )
+
+        fig.update_xaxes(
+            row=1,
+            col=1,
+            range=[-0.10, 1.18],
+            tickmode="array",
+            tickvals=[0.0, 1.0],
+            ticktext=["Today Open", "Projected Close"],
+            title_text="Session Path",
+        )
+        fig.update_yaxes(
+            row=1,
+            col=1,
+            title_text="Price",
+            range=[price_min - price_padding, price_max + price_padding],
+            tickprefix="$",
+        )
+        fig.update_xaxes(
+            row=2,
+            col=1,
+            title_text="Open-to-Close Return",
+            ticksuffix="%",
+        )
+        fig.update_yaxes(
+            row=2,
+            col=1,
+            title_text="Count",
+        )
+
+        title_date = session_date.strftime("%Y-%m-%d")
+        fig.update_layout(
+            title=self._header_title(
+                f"{ticker_label} Today Open-to-Close Probability Cone From Open "
+                f"({requested_window}-Session Model, {title_date})"
+            ),
+            height=1050,
+            margin=self._header_margin(),
+            template=template,
+            hovermode="closest",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            bargap=0.08,
+        )
+
+        fig.add_annotation(
+            x=0.0,
+            y=1.12,
+            xref="paper",
+            yref="paper",
+            text=(
+                f"Using the last {effective_window} completed open-to-close sessions. "
+                f"Open anchor: {anchor_price:,.2f}."
+            ),
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            font=dict(size=12, color="rgba(226, 232, 240, 0.92)"),
+        )
+        return fig
+
+
+    def plot_trade_range_probability_cone(
+        self,
+        cone_context,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot an open-anchored two-sided probability cone with long and short tail markers
+        for same-day trade planning.
+        """
+        required_keys = {
+            "session_date",
+            "window",
+            "effective_window",
+            "anchor_price",
+            "latest_price",
+            "sample_returns",
+            "interval_confidence_levels",
+            "tail_confidence_levels",
+            "intervals",
+            "long_tail_levels",
+            "short_tail_levels",
+            "median_return",
+            "median_price",
+        }
+        if not isinstance(cone_context, Mapping):
+            raise TypeError("cone_context must be a mapping.")
+
+        raw_contexts_by_window = cone_context.get("cone_contexts_by_window")
+        window_options = cone_context.get("windows")
+        default_window = self._coerce_positive_int(
+            cone_context.get("default_window", cone_context.get("window"))
+        )
+
+        if isinstance(raw_contexts_by_window, Mapping) and raw_contexts_by_window:
+            contexts_by_window = {}
+            for key, context in raw_contexts_by_window.items():
+                coerced_window = self._coerce_positive_int(key)
+                if coerced_window is None:
+                    continue
+                contexts_by_window[coerced_window] = context
+
+            if window_options is None:
+                window_options = list(contexts_by_window.keys())
+            else:
+                try:
+                    window_options = [int(window) for window in window_options]
+                except Exception as exc:
+                    raise ValueError("cone_context windows must be iterable integers.") from exc
+                window_options = [window for window in window_options if window in contexts_by_window]
+
+            if not window_options:
+                raise ValueError("cone_context does not contain any valid probability-cone windows.")
+            if default_window not in window_options:
+                default_window = self._preferred_numeric_window(window_options) or window_options[0]
+        else:
+            missing = [key for key in required_keys if key not in cone_context]
+            if missing:
+                raise ValueError(f"cone_context missing required keys: {missing}")
+            default_window = int(cone_context["window"])
+            window_options = [default_window]
+            contexts_by_window = {default_window: cone_context}
+
+        default_context = contexts_by_window[default_window]
+        missing = [key for key in required_keys if key not in default_context]
+        if missing:
+            raise ValueError(f"cone_context missing required keys: {missing}")
+
+        interval_levels = sorted(default_context["interval_confidence_levels"], reverse=True)
+        tail_levels = sorted(default_context["tail_confidence_levels"])
+        panel_confidence_levels = sorted(set(interval_levels).intersection(tail_levels))
+        if not panel_confidence_levels:
+            panel_confidence_levels = sorted(set(interval_levels).union(tail_levels))
+
+        distribution_row = len(panel_confidence_levels) + 1
+        distribution_height = 0.32
+        panel_height = (1.0 - distribution_height) / len(panel_confidence_levels)
+        row_heights = [panel_height] * len(panel_confidence_levels) + [distribution_height]
+        subplot_titles = tuple(
+            [
+                f"Today Open-Anchored {confidence:.0%} Projected Close Range (Open-to-Close)"
+                for confidence in panel_confidence_levels
+            ]
+            + ["Trailing Open-to-Close Return Distribution"]
+        )
+
+        fig = make_subplots(
+            rows=distribution_row,
+            cols=1,
+            vertical_spacing=0.08,
+            row_heights=row_heights,
+            subplot_titles=subplot_titles,
+        )
+        subplot_title_annotations = [copy.deepcopy(annotation) for annotation in fig.layout.annotations]
+
+        interval_fill_colors = [
+            "rgba(59, 130, 246, 0.18)",
+            "rgba(34, 197, 94, 0.24)",
+            "rgba(245, 158, 11, 0.30)",
+            "rgba(239, 68, 68, 0.34)",
+        ]
+        interval_line_colors = [
+            "rgba(59, 130, 246, 0.72)",
+            "rgba(34, 197, 94, 0.84)",
+            "rgba(245, 158, 11, 0.88)",
+            "rgba(239, 68, 68, 0.90)",
+        ]
+
+        global_price_min = None
+        global_price_max = None
+        for window in window_options:
+            context = contexts_by_window[window]
+            missing = [key for key in required_keys if key not in context]
+            if missing:
+                raise ValueError(f"cone_context for window {window} missing required keys: {missing}")
+
+            window_interval_levels = sorted(context["interval_confidence_levels"], reverse=True)
+            window_tail_levels = sorted(context["tail_confidence_levels"])
+            window_panel_levels = sorted(set(window_interval_levels).intersection(window_tail_levels))
+            if not window_panel_levels:
+                window_panel_levels = sorted(set(window_interval_levels).union(window_tail_levels))
+            if window_panel_levels != panel_confidence_levels:
+                raise ValueError("All cone windows must share the same confidence-level layout.")
+
+            interval_map = context["intervals"]
+            long_tail_map = context["long_tail_levels"]
+            short_tail_map = context["short_tail_levels"]
+            anchor_price = float(context["anchor_price"])
+            latest_price = float(context["latest_price"])
+            median_price = float(context["median_price"])
+
+            candidate_prices = [anchor_price, latest_price, median_price]
+            for confidence in window_interval_levels:
+                band = interval_map[confidence]
+                candidate_prices.extend([band["lower_price"], band["upper_price"]])
+            for confidence in window_tail_levels:
+                long_tail = long_tail_map[confidence]
+                short_tail = short_tail_map[confidence]
+                candidate_prices.extend(
+                    [
+                        long_tail["var_price"],
+                        long_tail["expected_shortfall_price"],
+                        short_tail["var_price"],
+                        short_tail["expected_shortfall_price"],
+                    ]
+                )
+
+            valid_prices = [float(price) for price in candidate_prices if np.isfinite(price)]
+            if not valid_prices:
+                raise ValueError(
+                    f"cone_context for window {window} does not contain any finite price levels to plot."
+                )
+            window_min = min(valid_prices)
+            window_max = max(valid_prices)
+            global_price_min = window_min if global_price_min is None else min(global_price_min, window_min)
+            global_price_max = window_max if global_price_max is None else max(global_price_max, window_max)
+
+        if global_price_min is None or global_price_max is None:
+            raise ValueError("cone_context does not contain any finite price levels to plot.")
+
+        default_anchor_price = float(default_context["anchor_price"])
+        price_padding = max((global_price_max - global_price_min) * 0.10, default_anchor_price * 0.01)
+        price_axis_min = global_price_min - price_padding
+        price_axis_max = global_price_max + price_padding
+
+        def _axis_ref(row_idx, axis_name):
+            return axis_name if row_idx == 1 else f"{axis_name}{row_idx}"
+
+        def _window_title(context):
+            requested_window = int(context["window"])
+            title_date = pd.Timestamp(context["session_date"]).strftime("%Y-%m-%d")
+            return self._header_title(
+                f"{ticker_label} Two-Sided Open-to-Close Trade Range Cone From Open "
+                f"({requested_window}-Session Model, {title_date})"
+            )
+
+        def _window_annotation(context):
+            return dict(
+                x=0.0,
+                y=1.12,
+                xref="paper",
+                yref="paper",
+                text=(
+                    f"Using the last {int(context['effective_window'])} completed open-to-close sessions. "
+                    f"Open anchor: {float(context['anchor_price']):,.2f}. "
+                    "Red markers show long-risk floors; purple markers show short-risk ceilings."
+                ),
+                showarrow=False,
+                xanchor="left",
+                yanchor="top",
+                font=dict(size=12, color="rgba(226, 232, 240, 0.92)"),
+            )
+
+        def _window_shapes(context):
+            shapes = []
+            anchor_price = float(context["anchor_price"])
+            median_return = float(context["median_return"])
+            long_tail_map = context["long_tail_levels"]
+            short_tail_map = context["short_tail_levels"]
+
+            for row_idx in range(1, distribution_row):
+                xref = _axis_ref(row_idx, "x")
+                yref = _axis_ref(row_idx, "y")
+                shapes.append(
+                    dict(
+                        type="line",
+                        xref=xref,
+                        yref=f"{yref} domain",
+                        x0=1.0,
+                        x1=1.0,
+                        y0=0.0,
+                        y1=1.0,
+                        line=dict(dash="dot", color="rgba(248, 250, 252, 0.40)", width=1),
+                    )
+                )
+                shapes.append(
+                    dict(
+                        type="line",
+                        xref=xref,
+                        yref=yref,
+                        x0=-0.10,
+                        x1=1.20,
+                        y0=anchor_price,
+                        y1=anchor_price,
+                        line=dict(dash="dot", color="rgba(34, 197, 94, 0.45)", width=1),
+                    )
+                )
+
+            xref = _axis_ref(distribution_row, "x")
+            yref = _axis_ref(distribution_row, "y")
+            shapes.append(
+                dict(
+                    type="line",
+                    xref=xref,
+                    yref=f"{yref} domain",
+                    x0=median_return * 100.0,
+                    x1=median_return * 100.0,
+                    y0=0.0,
+                    y1=1.0,
+                    line=dict(dash="dash", color="#f8fafc", width=2),
+                )
+            )
+
+            for idx, confidence in enumerate(tail_levels):
+                long_tail = long_tail_map[confidence]
+                short_tail = short_tail_map[confidence]
+                long_color = "#ef4444" if idx == 0 else "#991b1b"
+                short_color = "#a855f7" if idx == 0 else "#6d28d9"
+
+                for value, color, dash in (
+                    (long_tail["var_return"] * 100.0, long_color, "dash"),
+                    (long_tail["expected_shortfall_return"] * 100.0, long_color, "dot"),
+                    (short_tail["var_return"] * 100.0, short_color, "dash"),
+                    (short_tail["expected_shortfall_return"] * 100.0, short_color, "dot"),
+                ):
+                    shapes.append(
+                        dict(
+                            type="line",
+                            xref=xref,
+                            yref=f"{yref} domain",
+                            x0=value,
+                            x1=value,
+                            y0=0.0,
+                            y1=1.0,
+                            line=dict(dash=dash, color=color, width=2),
+                        )
+                    )
+
+            return shapes
+
+        window_annotations = {}
+        window_shapes = {}
+        traces_per_window = None
+
+        for window in window_options:
+            visible = window == default_window
+            trace_start = len(fig.data)
+            context = contexts_by_window[window]
+            interval_map = context["intervals"]
+            long_tail_map = context["long_tail_levels"]
+            short_tail_map = context["short_tail_levels"]
+            sample_returns = pd.Series(context["sample_returns"]).dropna()
+
+            if sample_returns.empty:
+                raise ValueError(
+                    f"cone_context sample_returns for window {window} must contain at least one return observation."
+                )
+
+            anchor_price = float(context["anchor_price"])
+            latest_price = float(context["latest_price"])
+            median_price = float(context["median_price"])
+            effective_window = int(context["effective_window"])
+
+            def add_projected_close_row(target_row, confidence, *, show_shared_legend):
+                band = interval_map.get(confidence)
+                style_index = panel_confidence_levels.index(confidence)
+                fill_color = interval_fill_colors[style_index % len(interval_fill_colors)]
+                line_color = interval_line_colors[style_index % len(interval_line_colors)]
+
+                if band is not None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[0.0, 1.0, 1.0, 0.0, 0.0],
+                            y=[anchor_price, band["upper_price"], band["lower_price"], anchor_price, anchor_price],
+                            mode="lines",
+                            line=dict(color=line_color, width=1.5),
+                            fill="toself",
+                            fillcolor=fill_color,
+                            name=f"{confidence:.0%} Open-to-Close Close Range",
+                            hovertemplate=(
+                                f"{confidence:.0%} Open-to-Close Close Range"
+                                "<br>Lower Close: %{customdata[0]:,.2f}"
+                                "<br>Upper Close: %{customdata[1]:,.2f}"
+                                "<br>Lower Return: %{customdata[2]:.4%}"
+                                "<br>Upper Return: %{customdata[3]:.4%}"
+                                "<extra></extra>"
+                            ),
+                            customdata=[
+                                [
+                                    band["lower_price"],
+                                    band["upper_price"],
+                                    band["lower_return"],
+                                    band["upper_return"],
+                                ]
+                            ] * 5,
+                            showlegend=True,
+                            legendgroup=f"range-{confidence:.0%}",
+                            visible=visible,
+                        ),
+                        row=target_row,
+                        col=1,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0, 1.0],
+                            y=[band["lower_price"], band["upper_price"]],
+                            mode="markers",
+                            name=f"{confidence:.0%} Range Edges",
+                            marker=dict(color=line_color, size=8, symbol="diamond"),
+                            hovertemplate=(
+                                f"{confidence:.0%} Range Edge"
+                                "<br>Close Price: %{y:,.2f}"
+                                "<br>Return Threshold: %{customdata[0]:.4%}"
+                                "<extra></extra>"
+                            ),
+                            customdata=[[band["lower_return"]], [band["upper_return"]]],
+                            showlegend=False,
+                            legendgroup=f"range-{confidence:.0%}",
+                            visible=visible,
+                        ),
+                        row=target_row,
+                        col=1,
+                    )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=[0.0, 1.0],
+                        y=[anchor_price, median_price],
+                        mode="lines+markers",
+                        name="Median Close",
+                        line=dict(color="#f8fafc", width=2, dash="dash"),
+                        marker=dict(size=8, color="#f8fafc"),
+                        hovertemplate="Median Close: %{y:,.2f}<extra></extra>",
+                        showlegend=show_shared_legend,
+                        legendgroup="median-close",
+                        visible=visible,
+                    ),
+                    row=target_row,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[0.0],
+                        y=[anchor_price],
+                        mode="markers+text",
+                        name="Session Open",
+                        marker=dict(size=10, color="#22c55e", symbol="diamond"),
+                        text=[f"Open {anchor_price:,.2f}"],
+                        textposition="top left",
+                        hovertemplate="Session Open: %{y:,.2f}<extra></extra>",
+                        showlegend=show_shared_legend,
+                        legendgroup="session-open",
+                        visible=visible,
+                    ),
+                    row=target_row,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[1.0],
+                        y=[latest_price],
+                        mode="markers+text",
+                        name="Latest Price So Far",
+                        marker=dict(size=9, color="#38bdf8", symbol="circle"),
+                        text=[f"Last {latest_price:,.2f}"],
+                        textposition="middle right",
+                        hovertemplate="Latest Price So Far: %{y:,.2f}<extra></extra>",
+                        showlegend=show_shared_legend,
+                        legendgroup="latest-session-price",
+                        visible=visible,
+                    ),
+                    row=target_row,
+                    col=1,
+                )
+
+            for row_idx, confidence in enumerate(panel_confidence_levels, start=1):
+                add_projected_close_row(row_idx, confidence, show_shared_legend=row_idx == 1)
+
+                long_tail = long_tail_map.get(confidence)
+                short_tail = short_tail_map.get(confidence)
+                style_index = panel_confidence_levels.index(confidence)
+                long_color = "#ef4444" if style_index == 0 else "#991b1b"
+                short_color = "#a855f7" if style_index == 0 else "#6d28d9"
+
+                if long_tail is not None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0],
+                            y=[long_tail["var_price"]],
+                            mode="markers+text",
+                            name=f"{confidence:.0%} Open-to-Close Long VaR Floor",
+                            marker=dict(size=11, color=long_color, symbol="triangle-down"),
+                            text=[f"{confidence:.0%} Long VaR Floor {long_tail['var_price']:,.2f}"],
+                            textposition="middle right",
+                            hovertemplate=(
+                                f"{confidence:.0%} Open-to-Close Long VaR Floor"
+                                "<br>Close Price: %{y:,.2f}"
+                                f"<br>Return Threshold: {long_tail['var_return']:.4%}"
+                                "<extra></extra>"
+                            ),
+                            visible=visible,
+                        ),
+                        row=row_idx,
+                        col=1,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0],
+                            y=[long_tail["expected_shortfall_price"]],
+                            mode="markers+text",
+                            name=f"{confidence:.0%} Open-to-Close Long CVaR Floor",
+                            marker=dict(size=10, color=long_color, symbol="x"),
+                            text=[f"{confidence:.0%} Long CVaR Floor {long_tail['expected_shortfall_price']:,.2f}"],
+                            textposition="middle right",
+                            hovertemplate=(
+                                f"{confidence:.0%} Open-to-Close Long CVaR Floor"
+                                "<br>Close Price: %{y:,.2f}"
+                                f"<br>Expected Shortfall: {long_tail['expected_shortfall_return']:.4%}"
+                                "<extra></extra>"
+                            ),
+                            showlegend=False,
+                            visible=visible,
+                        ),
+                        row=row_idx,
+                        col=1,
+                    )
+                if short_tail is not None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0],
+                            y=[short_tail["var_price"]],
+                            mode="markers+text",
+                            name=f"{confidence:.0%} Open-to-Close Short VaR Ceiling",
+                            marker=dict(size=11, color=short_color, symbol="triangle-up"),
+                            text=[f"{confidence:.0%} Short VaR Ceiling {short_tail['var_price']:,.2f}"],
+                            textposition="middle right",
+                            hovertemplate=(
+                                f"{confidence:.0%} Open-to-Close Short VaR Ceiling"
+                                "<br>Close Price: %{y:,.2f}"
+                                f"<br>Return Threshold: {short_tail['var_return']:.4%}"
+                                "<extra></extra>"
+                            ),
+                            visible=visible,
+                        ),
+                        row=row_idx,
+                        col=1,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0],
+                            y=[short_tail["expected_shortfall_price"]],
+                            mode="markers+text",
+                            name=f"{confidence:.0%} Open-to-Close Short CVaR Ceiling",
+                            marker=dict(size=10, color=short_color, symbol="x"),
+                            text=[f"{confidence:.0%} Short CVaR Ceiling {short_tail['expected_shortfall_price']:,.2f}"],
+                            textposition="middle right",
+                            hovertemplate=(
+                                f"{confidence:.0%} Open-to-Close Short CVaR Ceiling"
+                                "<br>Close Price: %{y:,.2f}"
+                                f"<br>Expected Shortfall: {short_tail['expected_shortfall_return']:.4%}"
+                                "<extra></extra>"
+                            ),
+                            showlegend=False,
+                            visible=visible,
+                        ),
+                        row=row_idx,
+                        col=1,
+                    )
+
+            histogram_values = sample_returns.mul(100.0)
+            fig.add_trace(
+                go.Histogram(
+                    x=histogram_values,
+                    nbinsx=min(max(effective_window // 8, 20), 60),
+                    name="Open-to-Close Returns",
+                    marker_color="rgba(59, 130, 246, 0.65)",
+                    opacity=0.85,
+                    hovertemplate="Return: %{x:.2f}%<br>Count: %{y}<extra></extra>",
+                    showlegend=False,
+                    visible=visible,
+                ),
+                row=distribution_row,
+                col=1,
+            )
+
+            added_traces = len(fig.data) - trace_start
+            if traces_per_window is None:
+                traces_per_window = added_traces
+
+            window_shapes[window] = _window_shapes(context)
+            window_annotations[window] = subplot_title_annotations + [_window_annotation(context)]
+
+        if traces_per_window is None or traces_per_window <= 0:
+            raise ValueError("Unable to build cone traces from the supplied probability payload.")
+
+        for row_idx in range(1, distribution_row):
+            fig.update_xaxes(
+                row=row_idx,
+                col=1,
+                range=[-0.10, 1.20],
+                tickmode="array",
+                tickvals=[0.0, 1.0],
+                ticktext=["Today Open", "Projected Close"],
+                title_text="Session Path",
+            )
+            fig.update_yaxes(
+                row=row_idx,
+                col=1,
+                title_text="Price",
+                range=[price_axis_min, price_axis_max],
+                tickprefix="$",
+            )
+
+        fig.update_xaxes(
+            row=distribution_row,
+            col=1,
+            title_text="Open-to-Close Return",
+            ticksuffix="%",
+        )
+        fig.update_yaxes(row=distribution_row, col=1, title_text="Count")
+
+        updatemenus = []
+        if len(window_options) > 1:
+            total_traces = len(fig.data)
+            buttons = []
+            for idx, window in enumerate(window_options):
+                visibility = build_visibility_mask(
+                    total_traces=total_traces,
+                    active_window_index=idx,
+                    traces_per_window=traces_per_window,
+                    constant_trace_indices=[],
+                )
+                buttons.append(
+                    dict(
+                        label=str(window),
+                        method="update",
+                        args=[
+                            {"visible": visibility},
+                            {
+                                "title": _window_title(contexts_by_window[window]),
+                                "shapes": window_shapes[window],
+                                "annotations": window_annotations[window],
+                            },
+                        ],
+                    )
+                )
+            updatemenus = [
+                self._dropdown_menu(
+                    buttons=buttons,
+                    x=0.0,
+                    active=window_options.index(default_window),
+                )
+            ]
+
+        fig.update_layout(
+            updatemenus=updatemenus,
+            title=_window_title(default_context),
+            annotations=window_annotations[default_window],
+            shapes=window_shapes[default_window],
+            height=1450,
+            margin=self._header_margin(),
+            template=template,
+            hovermode="closest",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            bargap=0.08,
+        )
+        return fig
+
+    def plot_trade_range_history_profile(
+        self,
+        history_context,
+        ticker_label="Asset",
+        template="plotly_dark",
+    ):
+        """
+        Plot an ex-ante historical long/short trade-range profile using open-to-close
+        returns and prior-session information only.
+        """
+        required_keys = {
+            "interval_confidence_levels",
+            "tail_confidence_levels",
+            "session_returns",
+            "session_open",
+            "session_close",
+        }
+        if not isinstance(history_context, Mapping):
+            raise TypeError("history_context must be a mapping.")
+        missing = [key for key in required_keys if key not in history_context]
+        if missing:
+            raise ValueError(f"history_context missing required keys: {missing}")
+
+        metrics_by_window = history_context.get("metrics_by_window")
+        window_options = history_context.get("windows")
+        default_window = history_context.get("default_window", history_context.get("window"))
+
+        if isinstance(metrics_by_window, Mapping) and metrics_by_window:
+            if window_options is None:
+                window_options = list(metrics_by_window.keys())
+            else:
+                try:
+                    window_options = [int(window) for window in window_options]
+                except Exception as exc:
+                    raise ValueError("history_context windows must be iterable integers.") from exc
+                window_options = [window for window in window_options if window in metrics_by_window]
+
+            if not window_options:
+                raise ValueError("history_context does not contain any valid rolling windows.")
+            if default_window not in window_options:
+                default_window = self._preferred_numeric_window(window_options) or window_options[0]
+        else:
+            metrics_by_confidence = history_context.get("metrics_by_confidence")
+            if not isinstance(metrics_by_confidence, Mapping) or not metrics_by_confidence:
+                raise ValueError(
+                    "history_context metrics_by_confidence must be a non-empty mapping."
+                )
+            default_window = int(history_context["window"])
+            window_options = [default_window]
+            metrics_by_window = {default_window: metrics_by_confidence}
+
+        interval_levels = sorted(history_context["interval_confidence_levels"], reverse=True)
+        tail_levels = sorted(history_context["tail_confidence_levels"])
+        session_returns = pd.Series(history_context["session_returns"]).dropna()
+        session_close = pd.Series(history_context["session_close"]).dropna()
+        if session_returns.empty or session_close.empty:
+            raise ValueError("history_context does not contain enough session data to plot.")
+
+        fig = make_subplots(
+            rows=4,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.04,
+            row_heights=[0.30, 0.24, 0.23, 0.23],
+            subplot_titles=(
+                "Open-to-Close Returns with Two-Sided Tail Thresholds",
+                "Rolling Open-to-Close Tail Forecasts: Long Floors and Short Ceilings",
+                "Rolling Open-to-Close Lower Breach Rates vs Expected",
+                "Rolling Open-to-Close Upper Breach Rates vs Expected",
+            ),
+        )
+
+        interval_fill_colors = {
+            0.95: "rgba(34, 197, 94, 0.18)",
+            0.99: "rgba(59, 130, 246, 0.15)",
+        }
+        interval_line_colors = {
+            0.95: "rgba(34, 197, 94, 0.82)",
+            0.99: "rgba(59, 130, 246, 0.82)",
+        }
+        long_colors = {
+            0.95: "#ef4444",
+            0.99: "#991b1b",
+        }
+        short_colors = {
+            0.95: "#a855f7",
+            0.99: "#6d28d9",
+        }
+
+        index_candidates = [session_returns.index]
+        traces_per_window = None
+        return_colors = np.where(
+            session_returns >= 0,
+            "rgba(34, 197, 94, 0.45)",
+            "rgba(239, 68, 68, 0.45)",
+        ).tolist()
+
+        for window in window_options:
+            visible = window == default_window
+            trace_start = len(fig.data)
+            metrics_by_confidence = metrics_by_window.get(window, {})
+
+            fig.add_trace(
+                go.Bar(
+                    x=session_returns.index,
+                    y=session_returns,
+                    name="Open-to-Close Return",
+                    marker_color=return_colors,
+                    opacity=0.75,
+                    hovertemplate=(
+                        "Date: %{x|%Y-%m-%d}"
+                        "<br>Open-to-Close Return: %{y:.4%}"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                    visible=visible,
+                ),
+                row=1,
+                col=1,
+            )
+
+            for confidence in tail_levels:
+                metric_set = metrics_by_confidence.get(confidence, {})
+                lower_var_return = metric_set.get("lower_var_return", pd.Series(dtype=float)).dropna()
+                upper_var_return = metric_set.get("upper_var_return", pd.Series(dtype=float)).dropna()
+                lower_es_return = metric_set.get(
+                    "lower_expected_shortfall_return",
+                    pd.Series(dtype=float),
+                ).dropna()
+                upper_es_return = metric_set.get(
+                    "upper_expected_shortfall_return",
+                    pd.Series(dtype=float),
+                ).dropna()
+                lower_breaches = metric_set.get("lower_breaches", pd.Series(dtype=float)).dropna()
+                upper_breaches = metric_set.get("upper_breaches", pd.Series(dtype=float)).dropna()
+
+                lower_breach_index = (
+                    lower_breaches.index[lower_breaches.astype(bool)]
+                    if not lower_breaches.empty
+                    else pd.Index([])
+                )
+                upper_breach_index = (
+                    upper_breaches.index[upper_breaches.astype(bool)]
+                    if not upper_breaches.empty
+                    else pd.Index([])
+                )
+                lower_breach_returns = session_returns.reindex(lower_breach_index).dropna()
+                upper_breach_returns = session_returns.reindex(upper_breach_index).dropna()
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=lower_var_return.index,
+                        y=lower_var_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Long VaR Return",
+                        line=dict(color=long_colors.get(confidence, "#ef4444"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Long VaR Return"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Return Threshold: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=upper_var_return.index,
+                        y=upper_var_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Short VaR Return",
+                        line=dict(color=short_colors.get(confidence, "#a855f7"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Short VaR Return"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Return Threshold: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=lower_breach_returns.index,
+                        y=lower_breach_returns,
+                        mode="markers",
+                        name=f"{confidence:.0%} Long Breaches",
+                        marker=dict(
+                            color=long_colors.get(confidence, "#ef4444"),
+                            size=7,
+                            symbol="x",
+                        ),
+                        hovertemplate=(
+                            f"{confidence:.0%} Long Breach"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Open-to-Close Return: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=upper_breach_returns.index,
+                        y=upper_breach_returns,
+                        mode="markers",
+                        name=f"{confidence:.0%} Short Breaches",
+                        marker=dict(
+                            color=short_colors.get(confidence, "#a855f7"),
+                            size=7,
+                            symbol="x",
+                        ),
+                        hovertemplate=(
+                            f"{confidence:.0%} Short Breach"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Open-to-Close Return: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=lower_var_return.index,
+                        y=lower_var_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Long VaR Floor",
+                        line=dict(color=long_colors.get(confidence, "#ef4444"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Long VaR Floor"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Forecast Threshold: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=lower_es_return.index,
+                        y=lower_es_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Long CVaR Floor",
+                        line=dict(
+                            color=long_colors.get(confidence, "#ef4444"),
+                            width=2,
+                            dash="dot",
+                        ),
+                        hovertemplate=(
+                            f"{confidence:.0%} Long CVaR Floor"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Expected Shortfall: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=upper_var_return.index,
+                        y=upper_var_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Short VaR Ceiling",
+                        line=dict(color=short_colors.get(confidence, "#a855f7"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Short VaR Ceiling"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Forecast Threshold: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=upper_es_return.index,
+                        y=upper_es_return,
+                        mode="lines",
+                        name=f"{confidence:.0%} Short CVaR Ceiling",
+                        line=dict(
+                            color=short_colors.get(confidence, "#a855f7"),
+                            width=2,
+                            dash="dot",
+                        ),
+                        hovertemplate=(
+                            f"{confidence:.0%} Short CVaR Ceiling"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Expected Shortfall: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                        visible=visible,
+                    ),
+                    row=2,
+                    col=1,
+                )
+
+                for series in (
+                    lower_var_return,
+                    upper_var_return,
+                    lower_es_return,
+                    upper_es_return,
+                    lower_breach_returns,
+                    upper_breach_returns,
+                ):
+                    if not series.empty:
+                        index_candidates.append(series.index)
+
+            for confidence in tail_levels:
+                metric_set = metrics_by_confidence.get(confidence, {})
+                lower_breach_rate = metric_set.get(
+                    "lower_rolling_breach_rate",
+                    pd.Series(dtype=float),
+                ).dropna()
+                upper_breach_rate = metric_set.get(
+                    "upper_rolling_breach_rate",
+                    pd.Series(dtype=float),
+                ).dropna()
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=lower_breach_rate.index,
+                        y=lower_breach_rate,
+                        mode="lines",
+                        name=f"{confidence:.0%} Long Breach Rate",
+                        line=dict(color=long_colors.get(confidence, "#ef4444"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Long Breach Rate"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Breach Rate: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        visible=visible,
+                    ),
+                    row=3,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=upper_breach_rate.index,
+                        y=upper_breach_rate,
+                        mode="lines",
+                        name=f"{confidence:.0%} Short Breach Rate",
+                        line=dict(color=short_colors.get(confidence, "#a855f7"), width=2),
+                        hovertemplate=(
+                            f"{confidence:.0%} Short Breach Rate"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Breach Rate: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        visible=visible,
+                    ),
+                    row=4,
+                    col=1,
+                )
+
+                for series in (lower_breach_rate, upper_breach_rate):
+                    if not series.empty:
+                        index_candidates.append(series.index)
+
+            added_traces = len(fig.data) - trace_start
+            if traces_per_window is None:
+                traces_per_window = added_traces
+
+        for confidence in tail_levels:
+            expected_tail_rate = 1.0 - confidence
+            reference_color = "#94a3b8" if confidence == 0.95 else "#64748b"
+            for row_idx, row_label in ((3, "Lower"), (4, "Upper")):
+                fig.add_hline(
+                    y=expected_tail_rate,
+                    row=row_idx,
+                    col=1,
+                    line_dash="dot",
+                    line_color=reference_color,
+                    line_width=1.5,
+                )
+                fig.add_annotation(
+                    x=0.99,
+                    y=expected_tail_rate,
+                    xref=f"x{row_idx} domain",
+                    yref=f"y{row_idx}",
+                    text=f"{confidence:.0%} Expected {row_label} Tail {expected_tail_rate:.2%}",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="bottom",
+                    font=dict(size=10, color=reference_color),
+                )
+
+        fig.add_hline(
+            y=0,
+            row=1,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(248, 250, 252, 0.40)",
+            line_width=1,
+        )
+        fig.add_hline(
+            y=0,
+            row=2,
+            col=1,
+            line_dash="dash",
+            line_color="rgba(248, 250, 252, 0.40)",
+            line_width=1,
+        )
+        fig.update_yaxes(title_text="Open-to-Close Return", tickformat=".2%", row=1, col=1)
+        fig.update_yaxes(title_text="Forecast Return Threshold", tickformat=".2%", row=2, col=1)
+        fig.update_yaxes(title_text="Lower Breach Rate", tickformat=".2%", row=3, col=1)
+        fig.update_yaxes(title_text="Upper Breach Rate", tickformat=".2%", row=4, col=1)
+        fig.update_xaxes(title_text="Date", row=4, col=1)
+
+        if traces_per_window is None or traces_per_window <= 0:
+            raise ValueError("Unable to build trade-range traces from the supplied history payload.")
+
+        non_empty_indices = [index for index in index_candidates if len(index) > 0]
+        if non_empty_indices:
+            global_start = min(index[0] for index in non_empty_indices)
+            global_end = max(index[-1] for index in non_empty_indices)
+            default_start = max(global_start, global_end - pd.DateOffset(years=3))
+            fig.update_xaxes(range=[default_start, global_end])
+
+        total_traces = len(fig.data)
+        buttons = []
+        for idx, window in enumerate(window_options):
+            visibility = build_visibility_mask(
+                total_traces=total_traces,
+                active_window_index=idx,
+                traces_per_window=traces_per_window,
+                constant_trace_indices=[],
+            )
+            buttons.append(
+                dict(
+                    label=str(window),
+                    method="update",
+                    args=[
+                        {"visible": visibility},
+                        {
+                            "title": self._header_title(
+                                f"{ticker_label} Historical Two-Sided Trade Range Profile ({window}-Session Window)"
+                            )
+                        },
+                    ],
+                )
+            )
+
+        fig.update_layout(
+            updatemenus=[
+                self._dropdown_menu(
+                    buttons=buttons,
+                    x=0.0,
+                    active=window_options.index(default_window),
+                )
+            ],
+            title=self._header_title(
+                f"{ticker_label} Historical Two-Sided Trade Range Profile ({default_window}-Session Window)"
+            ),
+            height=1525,
+            margin=self._header_margin(top=170),
+            template=template,
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         )
         return fig
 
@@ -1780,7 +4828,7 @@ class LineChartPlotter:
         fig_volatility.update_layout(
             title="Mean and Median Volatility Across All Dates by Momentum Window",
             xaxis_title="Momentum Window Size (Days)",
-            yaxis_title="Volatility (Rolling Std of Returns)",
+            yaxis_title="Annualized Volatility (Rolling Std of Excess Returns)",
             template=template,
         )
         add_reference_vlines(fig_volatility)

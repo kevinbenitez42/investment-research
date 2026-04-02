@@ -17,6 +17,7 @@ from .ohlc_analytics import OHLCAnalytics
 from .rolling import Rolling, TimeSeriesAnalytics
 from .series_transforms import SeriesTransforms
 from .series_utils import (
+    calculate_historical_var_metrics,
     calculate_max_drawdown,
     calculate_textbook_rolling_max_drawdown,
     calculate_window_metrics,
@@ -48,6 +49,7 @@ __all__ = [
     "Models",
     "calculate_zscore",
     "zscore",
+    "calculate_historical_var_metrics",
     "calculate_max_drawdown",
     "calculate_textbook_rolling_max_drawdown",
     "gini_coefficient",

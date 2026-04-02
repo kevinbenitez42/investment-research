@@ -553,125 +553,218 @@ class Plotter:
             
         return fig
     
-    def plot_percentage_drop(self, data, n=14, title='Percentage Drop from Highest Peak', show=True):
+    def plot_percentage_drop(
+        self,
+        data,
+        n=14,
+        title='Percentage Drop from Highest Peak',
+        show=True,
+        window_options=None,
+        default_window=None,
+        display_days=None,
+    ):
         """
-        Plot the percentage drop from the highest peak using Plotly, including lines for the mean percentage drop
-        and negative standard deviation levels. Color bars blue if they fall below the mean, and red if below 0.5 
-        standard deviations below the mean.
-        
+        Plot percentage drop from the rolling high with optional window-selection dropdown.
+
         Parameters:
-        - daily_close: pd.DataFrame with 'Close', 'HighestHigh', and 'PercentageDrop' columns.
-        - n: Number of days to plot (the most recent n days).
+        - data: pd.DataFrame containing a 'Close' column.
+        - n: Legacy single calculation window used when window_options is not provided.
         - title: Title of the plot.
+        - window_options: Optional iterable of rolling windows to expose in a dropdown.
+        - default_window: Optional default dropdown selection.
+        - display_days: Optional number of trailing observations to display.
         """
-        # Ensure the index is a DateTimeIndex
-        
-        percentage_drop = rolling.calculate_percentage_drop(data, windows=n)['PercentageDrop']
-     
-        if not isinstance(data.index, pd.DatetimeIndex):
-            data.index = pd.to_datetime(data.index)
-        
-        # Compute statistics on the entire dataset
-        mean_percentage_drop = percentage_drop.mean()
-        std_dev = percentage_drop.std()
-        
-        # Slice the dataframe to get the last n days
-        data = data.tail(n)
-        
-        # Define bar colors based on the percentage drop
-        colors = ['red' if drop < mean_percentage_drop - 0.5 * std_dev
-                else 'blue' if drop < mean_percentage_drop +.25 * std_dev
-                else 'green' for drop in percentage_drop]
-        
-        # Create the bar chart
+        if "Close" not in data.columns:
+            raise ValueError("The DataFrame must contain a 'Close' column.")
+
+        plot_data = data.copy()
+        if not isinstance(plot_data.index, pd.DatetimeIndex):
+            plot_data.index = pd.to_datetime(plot_data.index)
+        plot_data = plot_data.sort_index().dropna(subset=["Close"])
+        if plot_data.empty:
+            raise ValueError("No non-null close data available for percentage drop plotting.")
+
+        if window_options is None:
+            window_list = [int(n)]
+            if display_days is None:
+                display_days = int(n)
+        else:
+            window_list = [int(window) for window in window_options]
+            if not window_list:
+                raise ValueError("window_options must contain at least one window.")
+
+        if display_days is not None:
+            display_days = int(display_days)
+            if display_days <= 0:
+                raise ValueError("display_days must be a positive integer.")
+
+        if default_window is None or int(default_window) not in window_list:
+            default_window = max(window_list)
+        default_window = int(default_window)
+
+        def _build_annotations(series_index, mean_drop, std_dev):
+            if len(series_index) == 0:
+                return []
+            anchor_x = series_index[min(max(int(len(series_index) * 0.1), 0), len(series_index) - 1)]
+            return [
+                dict(
+                    x=anchor_x,
+                    y=mean_drop + 0.5 * std_dev,
+                    text="Green: Bullish",
+                    showarrow=False,
+                    font=dict(size=12, color="green"),
+                    align="center",
+                ),
+                dict(
+                    x=anchor_x,
+                    y=mean_drop,
+                    text="Blue: Neutral",
+                    showarrow=False,
+                    font=dict(size=12, color="blue"),
+                    align="center",
+                ),
+                dict(
+                    x=anchor_x,
+                    y=mean_drop - 0.75 * std_dev,
+                    text="Red: Bearish",
+                    showarrow=False,
+                    font=dict(size=12, color="red"),
+                    align="center",
+                ),
+            ]
+
         fig = go.Figure()
-        
-        # Add the bars to the plot
-        fig.add_trace(go.Bar(
-            x=data.index,
-            y=percentage_drop,
-            marker_color=colors,
-            name='Percentage Drop'
-        ))
-        
-        # Add horizontal lines for mean and standard deviations (computed using the entire dataset)
-        fig.add_trace(go.Scatter(
-            x=[data.index.min(), data.index.max()],
-            y=[mean_percentage_drop, mean_percentage_drop],
-            mode='lines',
-            line=dict(color='blue', dash='dash', width=2),
-            name='Mean Percentage Drop',
-            visible='legendonly'  # This makes the line hidden by default
-        ))
-        
-        # Add horizontal lines for mean percentage drop + 0.25 standard deviations
-        fig.add_trace(go.Scatter(
-            x=[data.index.min(), data.index.max()],
-            y=[mean_percentage_drop + 0.25 * std_dev, mean_percentage_drop + 0.25 * std_dev],
-            mode='lines',
-            line=dict(color='purple', dash='dash', width=1),
-            name='Mean + 0.25 Std Dev'
-        ))
-        
-        # Add horizontal lines for mean percentage drop - 0.5 standard deviations   
-        fig.add_trace(go.Scatter(
-            x=[data.index.min(), data.index.max()],
-            y=[mean_percentage_drop - 0.5 * std_dev, mean_percentage_drop - 0.5 * std_dev],
-            mode='lines',
-            line=dict(color='red', dash='dash', width=1),
-            name='Mean - 0.5 Std Dev'
-        ))
-        
-        #add horizontal lines for mean percentage drop - 1 standard deviation
-        fig.add_trace(go.Scatter(
-            x=[data.index.min(), data.index.max()],
-            y=[mean_percentage_drop - 1.0 * std_dev, mean_percentage_drop - 1.0 * std_dev],
-            mode='lines',
-            line=dict(color='purple', dash='dash', width=1),
-            name='Mean - 1 Std Dev',
-            visible='legendonly'  # This makes the line hidden by default
-        ))
-        
-        
-        # Add annotations for color meanings
-        fig.add_annotation(
-            x=data.index[int(len(data) * 0.1)],  # Position on the x-axis
-            y=mean_percentage_drop + 0.5 * std_dev,  # Position on the y-axis
-            text="Green: Bullish",
-            showarrow=False,
-            font=dict(size=12, color="green"),
-            align="center"
-        )
-        fig.add_annotation(
-            x=data.index[int(len(data) * 0.1)],  # Position on the x-axis
-            y=mean_percentage_drop,  # Position on the y-axis
-            text="Blue: Neutral",
-            showarrow=False,
-            font=dict(size=12, color="blue"),
-            align="center"
-        )
-        fig.add_annotation(
-            x=data.index[int(len(data) * 0.1)],  # Position on the x-axis
-            y=mean_percentage_drop - 0.75 * std_dev,  # Position on the y-axis
-            text="Red: Bearish",
-            showarrow=False,
-            font=dict(size=12, color="red"),
-            align="center"
-        )
-        # Update layout to remove gaps by treating dates as categories
+        trace_state_map = {}
+        annotation_map = {}
+
+        for window in window_list:
+            percentage_drop = rolling.calculate_percentage_drop(plot_data, windows=window)["PercentageDrop"].dropna()
+            visible_drop = percentage_drop.tail(display_days) if display_days is not None else percentage_drop
+            mean_percentage_drop = percentage_drop.mean()
+            std_dev = percentage_drop.std()
+            if pd.isna(std_dev):
+                std_dev = 0.0
+
+            colors = [
+                'red' if drop < mean_percentage_drop - 0.5 * std_dev
+                else 'blue' if drop < mean_percentage_drop + 0.25 * std_dev
+                else 'green'
+                for drop in visible_drop
+            ]
+            x_span = [visible_drop.index.min(), visible_drop.index.max()] if not visible_drop.empty else []
+            annotation_map[window] = _build_annotations(visible_drop.index, mean_percentage_drop, std_dev)
+
+            default_states = [True, 'legendonly', True, True, 'legendonly']
+            visible_states = [state if window == default_window else False for state in default_states]
+            trace_indices = []
+
+            fig.add_trace(
+                go.Bar(
+                    x=visible_drop.index,
+                    y=visible_drop,
+                    marker_color=colors,
+                    name=f'Percentage Drop ({window}-Day)',
+                    visible=visible_states[0],
+                )
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[0]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_span,
+                    y=[mean_percentage_drop, mean_percentage_drop] if x_span else [],
+                    mode='lines',
+                    line=dict(color='blue', dash='dash', width=2),
+                    name='Mean Percentage Drop',
+                    visible=visible_states[1],
+                )
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[1]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_span,
+                    y=[mean_percentage_drop + 0.25 * std_dev, mean_percentage_drop + 0.25 * std_dev] if x_span else [],
+                    mode='lines',
+                    line=dict(color='purple', dash='dash', width=1),
+                    name='Mean + 0.25 Std Dev',
+                    visible=visible_states[2],
+                )
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[2]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_span,
+                    y=[mean_percentage_drop - 0.5 * std_dev, mean_percentage_drop - 0.5 * std_dev] if x_span else [],
+                    mode='lines',
+                    line=dict(color='red', dash='dash', width=1),
+                    name='Mean - 0.5 Std Dev',
+                    visible=visible_states[3],
+                )
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[3]))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_span,
+                    y=[mean_percentage_drop - 1.0 * std_dev, mean_percentage_drop - 1.0 * std_dev] if x_span else [],
+                    mode='lines',
+                    line=dict(color='purple', dash='dash', width=1),
+                    name='Mean - 1 Std Dev',
+                    visible=visible_states[4],
+                )
+            )
+            trace_indices.append((len(fig.data) - 1, default_states[4]))
+
+            trace_state_map[window] = trace_indices
+
+        buttons = []
+        total_traces = len(fig.data)
+        for window in window_list:
+            visibility = [False] * total_traces
+            for trace_idx, state in trace_state_map[window]:
+                visibility[trace_idx] = state
+            buttons.append(
+                dict(
+                    label=f'{window}-Day',
+                    method='update',
+                    args=[
+                        {'visible': visibility},
+                        {
+                            'title': f'{title} ({window}-Day Window)',
+                            'annotations': annotation_map[window],
+                        },
+                    ],
+                )
+            )
+
         fig.update_layout(
-            title=title,
+            title=f'{title} ({default_window}-Day Window)' if len(window_list) > 1 else title,
             xaxis_title='Date',
             yaxis_title='Percentage Drop',
             xaxis=dict(
-                type='category',  # Treat x-axis as categorical to prevent gaps
+                type='category',
                 tickangle=-45,
                 showgrid=True,
-                zeroline=False
+                zeroline=False,
             ),
-            barmode='overlay'
+            barmode='overlay',
+            annotations=annotation_map.get(default_window, []),
+            updatemenus=[
+                dict(
+                    type='dropdown',
+                    buttons=buttons,
+                    x=0.0,
+                    xanchor='left',
+                    y=1.12,
+                    yanchor='top',
+                    showactive=True,
+                    active=window_list.index(default_window),
+                )
+            ] if len(window_list) > 1 else [],
         )
-        
+
         if show:
             fig.show()
 
