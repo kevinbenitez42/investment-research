@@ -3246,6 +3246,17 @@ class LineChartPlotter:
         )
 
         updatemenus = [self._dropdown_menu(buttons=buttons, x=0.0)]
+        static_annotations = [
+            dict(
+                text="VaR Lookback Window",
+                x=0.0,
+                xref="paper",
+                y=1.115,
+                yref="paper",
+                showarrow=False,
+                xanchor="left",
+            )
+        ]
         if index_candidates:
             global_start = min(index[0] for index in index_candidates if len(index) > 0)
             global_end = max(index[-1] for index in index_candidates if len(index) > 0)
@@ -3257,10 +3268,22 @@ class LineChartPlotter:
                     x=0.18,
                 )
             )
+            static_annotations.append(
+                dict(
+                    text="View timeframe",
+                    x=0.18,
+                    xref="paper",
+                    y=1.115,
+                    yref="paper",
+                    showarrow=False,
+                    xanchor="left",
+                )
+            )
 
         fig.update_layout(
             updatemenus=updatemenus,
             title=self._header_title(f"{ticker_label} Historical Close-to-Close Downside VaR / CVaR Profile ({default_window}-Day Window)"),
+            annotations=list(fig.layout.annotations) + static_annotations,
             height=1200,
             margin=self._header_margin(),
             template=template,
@@ -3616,7 +3639,7 @@ class LineChartPlotter:
         template="plotly_dark",
     ):
         """
-        Plot an open-anchored two-sided probability cone with long and short tail markers
+        Plot a close-based two-sided probability cone with long and short tail markers
         for same-day trade planning.
         """
         required_keys = {
@@ -3677,6 +3700,59 @@ class LineChartPlotter:
         if missing:
             raise ValueError(f"cone_context missing required keys: {missing}")
 
+        def _trade_range_labels(context):
+            horizon_sessions = max(1, int(context.get("horizon_sessions", 1)))
+            if horizon_sessions == 1:
+                return {
+                    "panel_title": lambda confidence: (
+                        f"Today Prior-Close-Anchored {confidence:.0%} Projected Close Range (Close-to-Close)"
+                    ),
+                    "distribution_title": "Trailing Close-to-Close Return Distribution",
+                    "header_title": "Two-Sided Close-to-Close Trade Range Cone From Prior Close",
+                    "annotation_basis": "completed close-to-close sessions",
+                    "path_ticktext": ["Prior Close", "Projected Close"],
+                    "path_axis_title": "Close Path",
+                    "return_axis_title": "Close-to-Close Return",
+                    "histogram_name": "Close-to-Close Returns",
+                    "range_name": "Projected Close Range",
+                    "lower_price_label": "Lower Close",
+                    "upper_price_label": "Upper Close",
+                    "median_name": "Median Close",
+                    "anchor_name": "Prior Close",
+                    "anchor_text_prefix": "Prior Close",
+                    "show_latest_price": True,
+                    "latest_name": "Latest Price So Far",
+                    "latest_text_prefix": "Last",
+                    "tail_basis": "Close-to-Close",
+                }
+
+            horizon_label = f"{horizon_sessions}-Session"
+            horizon_lower = f"{horizon_sessions}-session"
+            return {
+                "panel_title": lambda confidence: (
+                    f"Reference-Close-Anchored {confidence:.0%} Projected Close Range ({horizon_label} Horizon)"
+                ),
+                "distribution_title": f"Trailing {horizon_label} Forward Return Distribution",
+                "header_title": f"Two-Sided {horizon_label} Trade Range Cone From Reference Close",
+                "annotation_basis": f"completed {horizon_lower} close-based forward returns",
+                "path_ticktext": ["Reference Close", "Projected Close"],
+                "path_axis_title": "Holding-Period Close Path",
+                "return_axis_title": f"{horizon_label} Forward Return",
+                "histogram_name": f"{horizon_label} Returns",
+                "range_name": f"{horizon_label} Projected Exit Range",
+                "lower_price_label": "Lower Exit Price",
+                "upper_price_label": "Upper Exit Price",
+                "median_name": "Median Exit Close",
+                "anchor_name": "Reference Close",
+                "anchor_text_prefix": "Reference Close",
+                "show_latest_price": False,
+                "latest_name": "Current Close",
+                "latest_text_prefix": "Current",
+                "tail_basis": horizon_label,
+            }
+
+        default_labels = _trade_range_labels(default_context)
+
         interval_levels = sorted(default_context["interval_confidence_levels"], reverse=True)
         tail_levels = sorted(default_context["tail_confidence_levels"])
         panel_confidence_levels = sorted(set(interval_levels).intersection(tail_levels))
@@ -3689,10 +3765,10 @@ class LineChartPlotter:
         row_heights = [panel_height] * len(panel_confidence_levels) + [distribution_height]
         subplot_titles = tuple(
             [
-                f"Today Open-Anchored {confidence:.0%} Projected Close Range (Open-to-Close)"
+                default_labels["panel_title"](confidence)
                 for confidence in panel_confidence_levels
             ]
-            + ["Trailing Open-to-Close Return Distribution"]
+            + [default_labels["distribution_title"]]
         )
 
         fig = make_subplots(
@@ -3780,20 +3856,22 @@ class LineChartPlotter:
         def _window_title(context):
             requested_window = int(context["window"])
             title_date = pd.Timestamp(context["session_date"]).strftime("%Y-%m-%d")
+            labels = _trade_range_labels(context)
             return self._header_title(
-                f"{ticker_label} Two-Sided Open-to-Close Trade Range Cone From Open "
-                f"({requested_window}-Session Model, {title_date})"
+                f"{ticker_label} {labels['header_title']} "
+                f"({requested_window}-Session Lookback, {title_date})"
             )
 
         def _window_annotation(context):
+            labels = _trade_range_labels(context)
             return dict(
                 x=0.0,
                 y=1.12,
                 xref="paper",
                 yref="paper",
                 text=(
-                    f"Using the last {int(context['effective_window'])} completed open-to-close sessions. "
-                    f"Open anchor: {float(context['anchor_price']):,.2f}. "
+                    f"Using the last {int(context['effective_window'])} {labels['annotation_basis']}. "
+                    f"Entry anchor: {float(context['anchor_price']):,.2f}. "
                     "Red markers show long-risk floors; purple markers show short-risk ceilings."
                 ),
                 showarrow=False,
@@ -3887,6 +3965,7 @@ class LineChartPlotter:
             visible = window == default_window
             trace_start = len(fig.data)
             context = contexts_by_window[window]
+            labels = _trade_range_labels(context)
             interval_map = context["intervals"]
             long_tail_map = context["long_tail_levels"]
             short_tail_map = context["short_tail_levels"]
@@ -3917,11 +3996,11 @@ class LineChartPlotter:
                             line=dict(color=line_color, width=1.5),
                             fill="toself",
                             fillcolor=fill_color,
-                            name=f"{confidence:.0%} Open-to-Close Close Range",
+                            name=f"{confidence:.0%} {labels['range_name']}",
                             hovertemplate=(
-                                f"{confidence:.0%} Open-to-Close Close Range"
-                                "<br>Lower Close: %{customdata[0]:,.2f}"
-                                "<br>Upper Close: %{customdata[1]:,.2f}"
+                                f"{confidence:.0%} {labels['range_name']}"
+                                f"<br>{labels['lower_price_label']}: %{{customdata[0]:,.2f}}"
+                                f"<br>{labels['upper_price_label']}: %{{customdata[1]:,.2f}}"
                                 "<br>Lower Return: %{customdata[2]:.4%}"
                                 "<br>Upper Return: %{customdata[3]:.4%}"
                                 "<extra></extra>"
@@ -3968,10 +4047,10 @@ class LineChartPlotter:
                         x=[0.0, 1.0],
                         y=[anchor_price, median_price],
                         mode="lines+markers",
-                        name="Median Close",
+                        name=labels["median_name"],
                         line=dict(color="#f8fafc", width=2, dash="dash"),
                         marker=dict(size=8, color="#f8fafc"),
-                        hovertemplate="Median Close: %{y:,.2f}<extra></extra>",
+                        hovertemplate=f"{labels['median_name']}: %{{y:,.2f}}<extra></extra>",
                         showlegend=show_shared_legend,
                         legendgroup="median-close",
                         visible=visible,
@@ -3984,11 +4063,11 @@ class LineChartPlotter:
                         x=[0.0],
                         y=[anchor_price],
                         mode="markers+text",
-                        name="Session Open",
+                        name=labels["anchor_name"],
                         marker=dict(size=10, color="#22c55e", symbol="diamond"),
-                        text=[f"Open {anchor_price:,.2f}"],
+                        text=[f"{labels['anchor_text_prefix']} {anchor_price:,.2f}"],
                         textposition="top left",
-                        hovertemplate="Session Open: %{y:,.2f}<extra></extra>",
+                        hovertemplate=f"{labels['anchor_name']}: %{{y:,.2f}}<extra></extra>",
                         showlegend=show_shared_legend,
                         legendgroup="session-open",
                         visible=visible,
@@ -3996,23 +4075,24 @@ class LineChartPlotter:
                     row=target_row,
                     col=1,
                 )
-                fig.add_trace(
-                    go.Scatter(
-                        x=[1.0],
-                        y=[latest_price],
-                        mode="markers+text",
-                        name="Latest Price So Far",
-                        marker=dict(size=9, color="#38bdf8", symbol="circle"),
-                        text=[f"Last {latest_price:,.2f}"],
-                        textposition="middle right",
-                        hovertemplate="Latest Price So Far: %{y:,.2f}<extra></extra>",
-                        showlegend=show_shared_legend,
-                        legendgroup="latest-session-price",
-                        visible=visible,
-                    ),
-                    row=target_row,
-                    col=1,
-                )
+                if labels["show_latest_price"]:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[1.0],
+                            y=[latest_price],
+                            mode="markers+text",
+                            name=labels["latest_name"],
+                            marker=dict(size=9, color="#38bdf8", symbol="circle"),
+                            text=[f"{labels['latest_text_prefix']} {latest_price:,.2f}"],
+                            textposition="middle right",
+                            hovertemplate=f"{labels['latest_name']}: %{{y:,.2f}}<extra></extra>",
+                            showlegend=show_shared_legend,
+                            legendgroup="latest-session-price",
+                            visible=visible,
+                        ),
+                        row=target_row,
+                        col=1,
+                    )
 
             for row_idx, confidence in enumerate(panel_confidence_levels, start=1):
                 add_projected_close_row(row_idx, confidence, show_shared_legend=row_idx == 1)
@@ -4029,12 +4109,12 @@ class LineChartPlotter:
                             x=[1.0],
                             y=[long_tail["var_price"]],
                             mode="markers+text",
-                            name=f"{confidence:.0%} Open-to-Close Long VaR Floor",
+                            name=f"{confidence:.0%} {labels['tail_basis']} Long VaR Floor",
                             marker=dict(size=11, color=long_color, symbol="triangle-down"),
                             text=[f"{confidence:.0%} Long VaR Floor {long_tail['var_price']:,.2f}"],
                             textposition="middle right",
                             hovertemplate=(
-                                f"{confidence:.0%} Open-to-Close Long VaR Floor"
+                                f"{confidence:.0%} {labels['tail_basis']} Long VaR Floor"
                                 "<br>Close Price: %{y:,.2f}"
                                 f"<br>Return Threshold: {long_tail['var_return']:.4%}"
                                 "<extra></extra>"
@@ -4049,12 +4129,12 @@ class LineChartPlotter:
                             x=[1.0],
                             y=[long_tail["expected_shortfall_price"]],
                             mode="markers+text",
-                            name=f"{confidence:.0%} Open-to-Close Long CVaR Floor",
+                            name=f"{confidence:.0%} {labels['tail_basis']} Long CVaR Floor",
                             marker=dict(size=10, color=long_color, symbol="x"),
                             text=[f"{confidence:.0%} Long CVaR Floor {long_tail['expected_shortfall_price']:,.2f}"],
                             textposition="middle right",
                             hovertemplate=(
-                                f"{confidence:.0%} Open-to-Close Long CVaR Floor"
+                                f"{confidence:.0%} {labels['tail_basis']} Long CVaR Floor"
                                 "<br>Close Price: %{y:,.2f}"
                                 f"<br>Expected Shortfall: {long_tail['expected_shortfall_return']:.4%}"
                                 "<extra></extra>"
@@ -4071,12 +4151,12 @@ class LineChartPlotter:
                             x=[1.0],
                             y=[short_tail["var_price"]],
                             mode="markers+text",
-                            name=f"{confidence:.0%} Open-to-Close Short VaR Ceiling",
+                            name=f"{confidence:.0%} {labels['tail_basis']} Short VaR Ceiling",
                             marker=dict(size=11, color=short_color, symbol="triangle-up"),
                             text=[f"{confidence:.0%} Short VaR Ceiling {short_tail['var_price']:,.2f}"],
                             textposition="middle right",
                             hovertemplate=(
-                                f"{confidence:.0%} Open-to-Close Short VaR Ceiling"
+                                f"{confidence:.0%} {labels['tail_basis']} Short VaR Ceiling"
                                 "<br>Close Price: %{y:,.2f}"
                                 f"<br>Return Threshold: {short_tail['var_return']:.4%}"
                                 "<extra></extra>"
@@ -4091,12 +4171,12 @@ class LineChartPlotter:
                             x=[1.0],
                             y=[short_tail["expected_shortfall_price"]],
                             mode="markers+text",
-                            name=f"{confidence:.0%} Open-to-Close Short CVaR Ceiling",
+                            name=f"{confidence:.0%} {labels['tail_basis']} Short CVaR Ceiling",
                             marker=dict(size=10, color=short_color, symbol="x"),
                             text=[f"{confidence:.0%} Short CVaR Ceiling {short_tail['expected_shortfall_price']:,.2f}"],
                             textposition="middle right",
                             hovertemplate=(
-                                f"{confidence:.0%} Open-to-Close Short CVaR Ceiling"
+                                f"{confidence:.0%} {labels['tail_basis']} Short CVaR Ceiling"
                                 "<br>Close Price: %{y:,.2f}"
                                 f"<br>Expected Shortfall: {short_tail['expected_shortfall_return']:.4%}"
                                 "<extra></extra>"
@@ -4113,7 +4193,7 @@ class LineChartPlotter:
                 go.Histogram(
                     x=histogram_values,
                     nbinsx=min(max(effective_window // 8, 20), 60),
-                    name="Open-to-Close Returns",
+                    name=labels["histogram_name"],
                     marker_color="rgba(59, 130, 246, 0.65)",
                     opacity=0.85,
                     hovertemplate="Return: %{x:.2f}%<br>Count: %{y}<extra></extra>",
@@ -4141,8 +4221,8 @@ class LineChartPlotter:
                 range=[-0.10, 1.20],
                 tickmode="array",
                 tickvals=[0.0, 1.0],
-                ticktext=["Today Open", "Projected Close"],
-                title_text="Session Path",
+                ticktext=default_labels["path_ticktext"],
+                title_text=default_labels["path_axis_title"],
             )
             fig.update_yaxes(
                 row=row_idx,
@@ -4155,7 +4235,7 @@ class LineChartPlotter:
         fig.update_xaxes(
             row=distribution_row,
             col=1,
-            title_text="Open-to-Close Return",
+            title_text=default_labels["return_axis_title"],
             ticksuffix="%",
         )
         fig.update_yaxes(row=distribution_row, col=1, title_text="Count")
@@ -4214,7 +4294,7 @@ class LineChartPlotter:
         template="plotly_dark",
     ):
         """
-        Plot an ex-ante historical long/short trade-range profile using open-to-close
+        Plot an ex-ante historical long/short trade-range profile using close-to-close
         returns and prior-session information only.
         """
         required_keys = {
@@ -4265,17 +4345,35 @@ class LineChartPlotter:
         if session_returns.empty or session_close.empty:
             raise ValueError("history_context does not contain enough session data to plot.")
 
+        horizon_sessions = max(1, int(history_context.get("horizon_sessions", 1)))
+        if horizon_sessions == 1:
+            history_labels = {
+                "return_name": "Close-to-Close Return",
+                "returns_panel": "Close-to-Close Returns with Two-Sided Tail Thresholds",
+                "forecast_panel": "Rolling Close-to-Close Tail Forecasts: Long Floors and Short Ceilings",
+                "breach_panel": "Rolling Close-to-Close Breach Rates vs Expected",
+                "header_basis": "Historical Two-Sided Close-to-Close Trade Range Profile",
+            }
+        else:
+            horizon_label = f"{horizon_sessions}-Session Forward"
+            history_labels = {
+                "return_name": f"{horizon_label} Return",
+                "returns_panel": f"{horizon_label} Returns with Two-Sided Tail Thresholds",
+                "forecast_panel": f"Rolling {horizon_label} Tail Forecasts: Long Floors and Short Ceilings",
+                "breach_panel": f"Rolling {horizon_label} Breach Rates vs Expected",
+                "header_basis": f"Historical Two-Sided {horizon_label} Trade Range Profile",
+            }
+
         fig = make_subplots(
-            rows=4,
+            rows=3,
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.04,
-            row_heights=[0.30, 0.24, 0.23, 0.23],
+            row_heights=[0.33, 0.27, 0.40],
             subplot_titles=(
-                "Open-to-Close Returns with Two-Sided Tail Thresholds",
-                "Rolling Open-to-Close Tail Forecasts: Long Floors and Short Ceilings",
-                "Rolling Open-to-Close Lower Breach Rates vs Expected",
-                "Rolling Open-to-Close Upper Breach Rates vs Expected",
+                history_labels["returns_panel"],
+                history_labels["forecast_panel"],
+                history_labels["breach_panel"],
             ),
         )
 
@@ -4313,12 +4411,12 @@ class LineChartPlotter:
                 go.Bar(
                     x=session_returns.index,
                     y=session_returns,
-                    name="Open-to-Close Return",
+                    name=history_labels["return_name"],
                     marker_color=return_colors,
                     opacity=0.75,
                     hovertemplate=(
                         "Date: %{x|%Y-%m-%d}"
-                        "<br>Open-to-Close Return: %{y:.4%}"
+                        f"<br>{history_labels['return_name']}: %{{y:.4%}}"
                         "<extra></extra>"
                     ),
                     showlegend=False,
@@ -4406,7 +4504,7 @@ class LineChartPlotter:
                         hovertemplate=(
                             f"{confidence:.0%} Long Breach"
                             "<br>Date: %{x|%Y-%m-%d}"
-                            "<br>Open-to-Close Return: %{y:.4%}"
+                            f"<br>{history_labels['return_name']}: %{{y:.4%}}"
                             "<extra></extra>"
                         ),
                         showlegend=False,
@@ -4429,7 +4527,7 @@ class LineChartPlotter:
                         hovertemplate=(
                             f"{confidence:.0%} Short Breach"
                             "<br>Date: %{x|%Y-%m-%d}"
-                            "<br>Open-to-Close Return: %{y:.4%}"
+                            f"<br>{history_labels['return_name']}: %{{y:.4%}}"
                             "<extra></extra>"
                         ),
                         showlegend=False,
@@ -4545,6 +4643,10 @@ class LineChartPlotter:
                     "upper_rolling_breach_rate",
                     pd.Series(dtype=float),
                 ).dropna()
+                either_side_breach_rate = metric_set.get(
+                    "either_side_rolling_breach_rate",
+                    pd.Series(dtype=float),
+                ).dropna()
 
                 fig.add_trace(
                     go.Scatter(
@@ -4579,11 +4681,32 @@ class LineChartPlotter:
                         ),
                         visible=visible,
                     ),
-                    row=4,
+                    row=3,
+                    col=1,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=either_side_breach_rate.index,
+                        y=either_side_breach_rate,
+                        mode="lines",
+                        name=f"{confidence:.0%} Either-Side Breach Rate",
+                        line=dict(
+                            color="#f59e0b" if confidence == 0.95 else "#b45309",
+                            width=2,
+                        ),
+                        hovertemplate=(
+                            f"{confidence:.0%} Either-Side Breach Rate"
+                            "<br>Date: %{x|%Y-%m-%d}"
+                            "<br>Breach Rate: %{y:.4%}"
+                            "<extra></extra>"
+                        ),
+                        visible=visible,
+                    ),
+                    row=3,
                     col=1,
                 )
 
-                for series in (lower_breach_rate, upper_breach_rate):
+                for series in (lower_breach_rate, upper_breach_rate, either_side_breach_rate):
                     if not series.empty:
                         index_candidates.append(series.index)
 
@@ -4594,26 +4717,45 @@ class LineChartPlotter:
         for confidence in tail_levels:
             expected_tail_rate = 1.0 - confidence
             reference_color = "#94a3b8" if confidence == 0.95 else "#64748b"
-            for row_idx, row_label in ((3, "Lower"), (4, "Upper")):
-                fig.add_hline(
-                    y=expected_tail_rate,
-                    row=row_idx,
-                    col=1,
-                    line_dash="dot",
-                    line_color=reference_color,
-                    line_width=1.5,
-                )
-                fig.add_annotation(
-                    x=0.99,
-                    y=expected_tail_rate,
-                    xref=f"x{row_idx} domain",
-                    yref=f"y{row_idx}",
-                    text=f"{confidence:.0%} Expected {row_label} Tail {expected_tail_rate:.2%}",
-                    showarrow=False,
-                    xanchor="right",
-                    yanchor="bottom",
-                    font=dict(size=10, color=reference_color),
-                )
+            fig.add_hline(
+                y=expected_tail_rate,
+                row=3,
+                col=1,
+                line_dash="dot",
+                line_color=reference_color,
+                line_width=1.5,
+            )
+            fig.add_annotation(
+                x=0.99,
+                y=expected_tail_rate,
+                xref="x3 domain",
+                yref="y3",
+                text=f"{confidence:.0%} Expected Long / Short {expected_tail_rate:.2%}",
+                showarrow=False,
+                xanchor="right",
+                yanchor="bottom",
+                font=dict(size=10, color=reference_color),
+            )
+            either_side_expected_rate = min(1.0, 2.0 * expected_tail_rate)
+            fig.add_hline(
+                y=either_side_expected_rate,
+                row=3,
+                col=1,
+                line_dash="dashdot",
+                line_color=reference_color,
+                line_width=1.5,
+            )
+            fig.add_annotation(
+                x=0.99,
+                y=either_side_expected_rate,
+                xref="x3 domain",
+                yref="y3",
+                text=f"{confidence:.0%} Expected Either-Side {either_side_expected_rate:.2%}",
+                showarrow=False,
+                xanchor="right",
+                yanchor="bottom",
+                font=dict(size=10, color=reference_color),
+            )
 
         fig.add_hline(
             y=0,
@@ -4631,11 +4773,10 @@ class LineChartPlotter:
             line_color="rgba(248, 250, 252, 0.40)",
             line_width=1,
         )
-        fig.update_yaxes(title_text="Open-to-Close Return", tickformat=".2%", row=1, col=1)
+        fig.update_yaxes(title_text=history_labels["return_name"], tickformat=".2%", row=1, col=1)
         fig.update_yaxes(title_text="Forecast Return Threshold", tickformat=".2%", row=2, col=1)
-        fig.update_yaxes(title_text="Lower Breach Rate", tickformat=".2%", row=3, col=1)
-        fig.update_yaxes(title_text="Upper Breach Rate", tickformat=".2%", row=4, col=1)
-        fig.update_xaxes(title_text="Date", row=4, col=1)
+        fig.update_yaxes(title_text="Breach Rate", tickformat=".2%", row=3, col=1)
+        fig.update_xaxes(title_text="Date", row=3, col=1)
 
         if traces_per_window is None or traces_per_window <= 0:
             raise ValueError("Unable to build trade-range traces from the supplied history payload.")
@@ -4664,7 +4805,7 @@ class LineChartPlotter:
                         {"visible": visibility},
                         {
                             "title": self._header_title(
-                                f"{ticker_label} Historical Two-Sided Trade Range Profile ({window}-Session Window)"
+                                f"{ticker_label} {history_labels['header_basis']} ({window}-Session Lookback)"
                             )
                         },
                     ],
@@ -4680,9 +4821,9 @@ class LineChartPlotter:
                 )
             ],
             title=self._header_title(
-                f"{ticker_label} Historical Two-Sided Trade Range Profile ({default_window}-Session Window)"
+                f"{ticker_label} {history_labels['header_basis']} ({default_window}-Session Lookback)"
             ),
-            height=1525,
+            height=1325,
             margin=self._header_margin(top=170),
             template=template,
             hovermode="x unified",

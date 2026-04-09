@@ -119,6 +119,53 @@ class RiskDistributionAnalytics:
             return 0.95
         return confidence_levels[0]
 
+    @staticmethod
+    def _normalize_horizon_sessions(horizon_sessions):
+        try:
+            horizon = int(horizon_sessions)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("horizon_sessions must be a positive integer.") from exc
+        if horizon <= 0:
+            raise ValueError("horizon_sessions must be a positive integer.")
+        return horizon
+
+    @staticmethod
+    def _resolve_current_reference_price(frame):
+        reference_price = frame.attrs.get("current_session_reference_price")
+        if reference_price is None:
+            current_session_date = frame.attrs.get("current_session_date")
+            last_frame_date = pd.Timestamp(frame.index[-1]).normalize()
+            if current_session_date is not None:
+                current_session_date = pd.Timestamp(current_session_date).normalize()
+                if current_session_date > last_frame_date:
+                    reference_price = frame["Close"].iloc[-1]
+                else:
+                    reference_price = frame["Close"].shift(1).iloc[-1]
+            else:
+                reference_price = frame["Close"].shift(1).iloc[-1]
+        if pd.isna(reference_price):
+            reference_price = frame["Close"].iloc[-1]
+        return float(reference_price)
+
+    @staticmethod
+    def _build_session_holding_period_frame(frame, horizon_sessions):
+        horizon = RiskDistributionAnalytics._normalize_horizon_sessions(horizon_sessions)
+        reference_series = frame["Close"].astype(float).shift(1)
+        close_series = frame["Close"].astype(float)
+        exit_close = close_series.shift(-(horizon - 1))
+        holding_frame = pd.DataFrame(
+            {
+                "session_open": reference_series,
+                "session_close": exit_close,
+                "session_return": exit_close.div(reference_series).sub(1.0),
+            }
+        ).dropna()
+        if holding_frame.empty:
+            raise ValueError(
+                f"price_frame does not contain enough completed sessions for a {horizon}-session horizon."
+            )
+        return holding_frame
+
     def build_risk_distribution_context(self, close_series, windows, default_window=None):
         """
         Build drawdown/skew/kurtosis/gini rolling metrics for each window.
@@ -211,7 +258,7 @@ class RiskDistributionAnalytics:
                 rolling_breach_rate = metric_set["rolling_breach_rate"].dropna()
 
                 summary_row = {
-                    "Window": window,
+                    "VaR Lookback Window": window,
                     "Confidence": f"{confidence:.0%}",
                     "Latest VaR": var_series.iloc[-1] if not var_series.empty else np.nan,
                     "Latest CVaR": es_series.iloc[-1] if not es_series.empty else np.nan,
@@ -234,7 +281,7 @@ class RiskDistributionAnalytics:
 
         summary_table = pd.DataFrame(summary_rows)
         if not summary_table.empty:
-            summary_table = summary_table.sort_values(["Window", "Confidence"]).reset_index(drop=True)
+            summary_table = summary_table.sort_values(["VaR Lookback Window", "Confidence"]).reset_index(drop=True)
 
         return {
             "close_series": close,
@@ -255,6 +302,8 @@ class RiskDistributionAnalytics:
         interval_confidence_levels=(0.50, 0.80, 0.90, 0.95),
         var_confidence_levels=(0.95, 0.99),
         anchor_price=None,
+        latest_price=None,
+        session_date=None,
     ):
         """
         Build an open-anchored probability cone for the latest session using trailing
@@ -303,11 +352,21 @@ class RiskDistributionAnalytics:
 
         effective_window = min(window, len(historical_returns))
         sample_returns = historical_returns.tail(effective_window)
-        session_date = frame.index[-1]
-        latest_price = float(frame["Close"].iloc[-1])
+        session_date = pd.Timestamp(
+            frame.attrs.get("current_session_date", frame.index[-1])
+            if session_date is None
+            else session_date
+        )
+        latest_price = float(
+            frame.attrs.get("current_session_latest_price", frame["Close"].iloc[-1])
+            if latest_price is None
+            else latest_price
+        )
 
         if anchor_price is None:
-            anchor_price = float(frame["Open"].iloc[-1])
+            anchor_price = float(
+                frame.attrs.get("current_session_anchor_price", frame["Open"].iloc[-1])
+            )
         else:
             anchor_price = float(anchor_price)
 
@@ -440,13 +499,16 @@ class RiskDistributionAnalytics:
         self,
         price_frame,
         window=200,
+        horizon_sessions=1,
         interval_confidence_levels=(0.95, 0.99),
         tail_confidence_levels=(0.95, 0.99),
         anchor_price=None,
+        latest_price=None,
+        session_date=None,
     ):
         """
-        Build a two-sided open-anchored session probability context for long and short
-        decision support using trailing open-to-close returns from completed sessions.
+        Build a two-sided close-based session probability context for long and short
+        decision support using trailing completed holding-period returns.
         """
         frame = self._coerce_ohlc_frame(price_frame)
         try:
@@ -455,28 +517,38 @@ class RiskDistributionAnalytics:
             raise ValueError("window must be a positive integer.") from exc
         if window <= 0:
             raise ValueError("window must be a positive integer.")
+        horizon_sessions = self._normalize_horizon_sessions(horizon_sessions)
 
         interval_confidence_levels = self._normalize_confidence_levels(interval_confidence_levels)
         tail_confidence_levels = self._normalize_confidence_levels(tail_confidence_levels)
 
-        session_returns = frame["Close"].div(frame["Open"]).sub(1.0).dropna()
+        holding_frame = self._build_session_holding_period_frame(frame, horizon_sessions)
+        session_returns = holding_frame["session_return"]
         if len(session_returns) < 2:
             raise ValueError(
-                "At least two sessions with valid open and close prices are required "
+                "At least two completed holding-period returns are required "
                 "to build a current-session probability range."
             )
 
         historical_returns = session_returns.iloc[:-1].dropna()
         if historical_returns.empty:
-            raise ValueError("No completed session returns are available for the trade range sample.")
+            raise ValueError("No completed holding-period returns are available for the trade range sample.")
 
         effective_window = min(window, len(historical_returns))
         sample_returns = historical_returns.tail(effective_window)
-        session_date = frame.index[-1]
-        latest_price = float(frame["Close"].iloc[-1])
+        session_date = pd.Timestamp(
+            frame.attrs.get("current_session_date", frame.index[-1])
+            if session_date is None
+            else session_date
+        )
+        latest_price = float(
+            frame.attrs.get("current_session_latest_price", frame["Close"].iloc[-1])
+            if latest_price is None
+            else latest_price
+        )
 
         if anchor_price is None:
-            anchor_price = float(frame["Open"].iloc[-1])
+            anchor_price = self._resolve_current_reference_price(frame)
         else:
             anchor_price = float(anchor_price)
 
@@ -559,6 +631,7 @@ class RiskDistributionAnalytics:
         return {
             "session_date": session_date,
             "window": window,
+            "horizon_sessions": horizon_sessions,
             "effective_window": effective_window,
             "anchor_price": anchor_price,
             "latest_price": latest_price,
@@ -579,14 +652,14 @@ class RiskDistributionAnalytics:
         price_frame,
         window=200,
         windows=None,
+        horizon_sessions=1,
         interval_confidence_levels=(0.95, 0.99),
         tail_confidence_levels=(0.95, 0.99),
         default_window=None,
     ):
         """
         Build ex-ante historical session trade-range metrics for one or more rolling
-        windows using only information available before each session. Returns are
-        open-to-close.
+        windows using only information available before each entry session.
         """
         frame = self._coerce_ohlc_frame(price_frame)
         window_seed = windows if windows is not None else [window]
@@ -595,16 +668,20 @@ class RiskDistributionAnalytics:
             window_options,
             default_window=default_window,
         )
+        horizon_sessions = self._normalize_horizon_sessions(horizon_sessions)
         interval_confidence_levels = self._normalize_confidence_levels(interval_confidence_levels)
         tail_confidence_levels = self._normalize_confidence_levels(tail_confidence_levels)
 
-        open_series = frame["Open"].astype(float)
-        close_series = frame["Close"].astype(float)
-        session_returns = close_series.div(open_series).sub(1.0).dropna()
+        holding_frame = self._build_session_holding_period_frame(frame, horizon_sessions)
+        open_series = holding_frame["session_open"]
+        close_series = holding_frame["session_close"]
+        session_returns = holding_frame["session_return"]
         max_window = max(window_options)
-        if len(session_returns) <= max_window:
+        minimum_observations = max_window + horizon_sessions - 1
+        if len(session_returns) <= minimum_observations:
             raise ValueError(
-                f"Not enough completed sessions to build a {max_window}-session historical trade range context."
+                f"Not enough completed sessions to build a {max_window}-session lookback with a "
+                f"{horizon_sessions}-session horizon."
             )
 
         def lower_tail_mean(values, quantile_level):
@@ -636,27 +713,28 @@ class RiskDistributionAnalytics:
             for confidence in all_confidences:
                 alpha = 1.0 - confidence
                 interval_alpha = (1.0 - confidence) / 2.0
+                shift_periods = horizon_sessions
 
                 lower_interval_return = (
-                    session_returns.rolling(rolling_window).quantile(interval_alpha).shift(1).dropna()
+                    session_returns.rolling(rolling_window).quantile(interval_alpha).shift(shift_periods).dropna()
                 )
                 upper_interval_return = (
-                    session_returns.rolling(rolling_window).quantile(1.0 - interval_alpha).shift(1).dropna()
+                    session_returns.rolling(rolling_window).quantile(1.0 - interval_alpha).shift(shift_periods).dropna()
                 )
-                lower_var_return = session_returns.rolling(rolling_window).quantile(alpha).shift(1).dropna()
-                upper_var_return = session_returns.rolling(rolling_window).quantile(1.0 - alpha).shift(1).dropna()
+                lower_var_return = session_returns.rolling(rolling_window).quantile(alpha).shift(shift_periods).dropna()
+                upper_var_return = session_returns.rolling(rolling_window).quantile(1.0 - alpha).shift(shift_periods).dropna()
                 lower_expected_shortfall_return = (
                     session_returns
                     .rolling(rolling_window)
                     .apply(lambda values, q=alpha: lower_tail_mean(values, q), raw=True)
-                    .shift(1)
+                    .shift(shift_periods)
                     .dropna()
                 )
                 upper_expected_shortfall_return = (
                     session_returns
                     .rolling(rolling_window)
                     .apply(lambda values, q=1.0 - alpha: upper_tail_mean(values, q), raw=True)
-                    .shift(1)
+                    .shift(shift_periods)
                     .dropna()
                 )
 
@@ -665,8 +743,12 @@ class RiskDistributionAnalytics:
                 upper_var_return = upper_var_return.reindex(aligned_returns.index)
                 lower_breaches = aligned_returns.lt(lower_var_return).astype(float)
                 upper_breaches = aligned_returns.gt(upper_var_return).astype(float)
+                either_side_breaches = lower_breaches.add(upper_breaches, fill_value=0.0).clip(upper=1.0)
                 lower_rolling_breach_rate = lower_breaches.rolling(rolling_window).mean().dropna()
                 upper_rolling_breach_rate = upper_breaches.rolling(rolling_window).mean().dropna()
+                either_side_rolling_breach_rate = (
+                    either_side_breaches.rolling(rolling_window).mean().dropna()
+                )
 
                 lower_expected_breach_rate = pd.Series(
                     data=np.full(len(lower_rolling_breach_rate.index), alpha, dtype=float),
@@ -675,6 +757,14 @@ class RiskDistributionAnalytics:
                 upper_expected_breach_rate = pd.Series(
                     data=np.full(len(upper_rolling_breach_rate.index), alpha, dtype=float),
                     index=upper_rolling_breach_rate.index,
+                )
+                either_side_expected_breach_rate = pd.Series(
+                    data=np.full(
+                        len(either_side_rolling_breach_rate.index),
+                        min(1.0, 2.0 * alpha),
+                        dtype=float,
+                    ),
+                    index=either_side_rolling_breach_rate.index,
                 )
 
                 open_for_interval = open_series.reindex(lower_interval_return.index)
@@ -699,10 +789,13 @@ class RiskDistributionAnalytics:
                     "upper_expected_shortfall_price": open_for_es.mul(1.0 + upper_expected_shortfall_return),
                     "lower_breaches": lower_breaches,
                     "upper_breaches": upper_breaches,
+                    "either_side_breaches": either_side_breaches,
                     "lower_rolling_breach_rate": lower_rolling_breach_rate,
                     "upper_rolling_breach_rate": upper_rolling_breach_rate,
+                    "either_side_rolling_breach_rate": either_side_rolling_breach_rate,
                     "lower_expected_breach_rate": lower_expected_breach_rate,
                     "upper_expected_breach_rate": upper_expected_breach_rate,
+                    "either_side_expected_breach_rate": either_side_expected_breach_rate,
                 }
 
             metrics_by_window[rolling_window] = metrics_by_confidence
@@ -711,6 +804,7 @@ class RiskDistributionAnalytics:
             "window": default_window,
             "windows": window_options,
             "default_window": default_window,
+            "horizon_sessions": horizon_sessions,
             "interval_confidence_levels": interval_confidence_levels,
             "tail_confidence_levels": tail_confidence_levels,
             "metrics_by_confidence": metrics_by_window[default_window],

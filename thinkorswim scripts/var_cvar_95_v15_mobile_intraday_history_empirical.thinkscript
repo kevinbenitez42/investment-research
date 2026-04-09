@@ -1,0 +1,1449 @@
+# Mobile-first empirical version based on v13.
+# This keeps the working intraday-history/session logic from v13, but changes
+# the VaR/CVaR thresholds to match Block 7 more closely:
+# - 50 completed session open-to-close returns
+# - empirical 95% VaR from the sampled return distribution
+# - empirical 95% CVaR as the mean of returns beyond the empirical cutoff
+
+declare upper;
+
+input showVaRCVaR = yes;
+input showOpeningRange = yes;
+
+def huge = 1000000.0;
+def eps = 0.0000000001;
+
+def o = open;
+def h = high;
+def l = low;
+def c = close;
+
+def sessionStart = RegularTradingStart(GetYYYYMMDD());
+def sessionEnd = RegularTradingEnd(GetYYYYMMDD());
+
+def openingBell =
+    GetTime()[1] < sessionStart and
+    GetTime() > sessionStart;
+
+def rth =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionEnd;
+
+def orActive =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionStart + 1800000;
+
+def orMeanActive =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionStart + 300000;
+
+def sessionOpen =
+    CompoundValue(
+        1,
+        if openingBell then o else sessionOpen[1],
+        o
+    );
+
+def sessionClose =
+    CompoundValue(
+        1,
+        if rth then c else sessionClose[1],
+        c
+    );
+
+def completedReturnAtOpen =
+    if openingBell and !IsNaN(sessionOpen[1]) and !IsNaN(sessionClose[1])
+    then sessionClose[1] / sessionOpen[1] - 1
+    else Double.NaN;
+
+def ret01 =
+    CompoundValue(1, if openingBell then completedReturnAtOpen else ret01[1], Double.NaN);
+def ret02 =
+    CompoundValue(1, if openingBell then ret01[1] else ret02[1], Double.NaN);
+def ret03 =
+    CompoundValue(1, if openingBell then ret02[1] else ret03[1], Double.NaN);
+def ret04 =
+    CompoundValue(1, if openingBell then ret03[1] else ret04[1], Double.NaN);
+def ret05 =
+    CompoundValue(1, if openingBell then ret04[1] else ret05[1], Double.NaN);
+def ret06 =
+    CompoundValue(1, if openingBell then ret05[1] else ret06[1], Double.NaN);
+def ret07 =
+    CompoundValue(1, if openingBell then ret06[1] else ret07[1], Double.NaN);
+def ret08 =
+    CompoundValue(1, if openingBell then ret07[1] else ret08[1], Double.NaN);
+def ret09 =
+    CompoundValue(1, if openingBell then ret08[1] else ret09[1], Double.NaN);
+def ret10 =
+    CompoundValue(1, if openingBell then ret09[1] else ret10[1], Double.NaN);
+def ret11 =
+    CompoundValue(1, if openingBell then ret10[1] else ret11[1], Double.NaN);
+def ret12 =
+    CompoundValue(1, if openingBell then ret11[1] else ret12[1], Double.NaN);
+def ret13 =
+    CompoundValue(1, if openingBell then ret12[1] else ret13[1], Double.NaN);
+def ret14 =
+    CompoundValue(1, if openingBell then ret13[1] else ret14[1], Double.NaN);
+def ret15 =
+    CompoundValue(1, if openingBell then ret14[1] else ret15[1], Double.NaN);
+def ret16 =
+    CompoundValue(1, if openingBell then ret15[1] else ret16[1], Double.NaN);
+def ret17 =
+    CompoundValue(1, if openingBell then ret16[1] else ret17[1], Double.NaN);
+def ret18 =
+    CompoundValue(1, if openingBell then ret17[1] else ret18[1], Double.NaN);
+def ret19 =
+    CompoundValue(1, if openingBell then ret18[1] else ret19[1], Double.NaN);
+def ret20 =
+    CompoundValue(1, if openingBell then ret19[1] else ret20[1], Double.NaN);
+def ret21 =
+    CompoundValue(1, if openingBell then ret20[1] else ret21[1], Double.NaN);
+def ret22 =
+    CompoundValue(1, if openingBell then ret21[1] else ret22[1], Double.NaN);
+def ret23 =
+    CompoundValue(1, if openingBell then ret22[1] else ret23[1], Double.NaN);
+def ret24 =
+    CompoundValue(1, if openingBell then ret23[1] else ret24[1], Double.NaN);
+def ret25 =
+    CompoundValue(1, if openingBell then ret24[1] else ret25[1], Double.NaN);
+def ret26 =
+    CompoundValue(1, if openingBell then ret25[1] else ret26[1], Double.NaN);
+def ret27 =
+    CompoundValue(1, if openingBell then ret26[1] else ret27[1], Double.NaN);
+def ret28 =
+    CompoundValue(1, if openingBell then ret27[1] else ret28[1], Double.NaN);
+def ret29 =
+    CompoundValue(1, if openingBell then ret28[1] else ret29[1], Double.NaN);
+def ret30 =
+    CompoundValue(1, if openingBell then ret29[1] else ret30[1], Double.NaN);
+def ret31 =
+    CompoundValue(1, if openingBell then ret30[1] else ret31[1], Double.NaN);
+def ret32 =
+    CompoundValue(1, if openingBell then ret31[1] else ret32[1], Double.NaN);
+def ret33 =
+    CompoundValue(1, if openingBell then ret32[1] else ret33[1], Double.NaN);
+def ret34 =
+    CompoundValue(1, if openingBell then ret33[1] else ret34[1], Double.NaN);
+def ret35 =
+    CompoundValue(1, if openingBell then ret34[1] else ret35[1], Double.NaN);
+def ret36 =
+    CompoundValue(1, if openingBell then ret35[1] else ret36[1], Double.NaN);
+def ret37 =
+    CompoundValue(1, if openingBell then ret36[1] else ret37[1], Double.NaN);
+def ret38 =
+    CompoundValue(1, if openingBell then ret37[1] else ret38[1], Double.NaN);
+def ret39 =
+    CompoundValue(1, if openingBell then ret38[1] else ret39[1], Double.NaN);
+def ret40 =
+    CompoundValue(1, if openingBell then ret39[1] else ret40[1], Double.NaN);
+def ret41 =
+    CompoundValue(1, if openingBell then ret40[1] else ret41[1], Double.NaN);
+def ret42 =
+    CompoundValue(1, if openingBell then ret41[1] else ret42[1], Double.NaN);
+def ret43 =
+    CompoundValue(1, if openingBell then ret42[1] else ret43[1], Double.NaN);
+def ret44 =
+    CompoundValue(1, if openingBell then ret43[1] else ret44[1], Double.NaN);
+def ret45 =
+    CompoundValue(1, if openingBell then ret44[1] else ret45[1], Double.NaN);
+def ret46 =
+    CompoundValue(1, if openingBell then ret45[1] else ret46[1], Double.NaN);
+def ret47 =
+    CompoundValue(1, if openingBell then ret46[1] else ret47[1], Double.NaN);
+def ret48 =
+    CompoundValue(1, if openingBell then ret47[1] else ret48[1], Double.NaN);
+def ret49 =
+    CompoundValue(1, if openingBell then ret48[1] else ret49[1], Double.NaN);
+def ret50 =
+    CompoundValue(1, if openingBell then ret49[1] else ret50[1], Double.NaN);
+
+def enoughHistory = !IsNaN(ret50);
+
+# Empirical 95% quantile with 50 observations and linear interpolation.
+# This mirrors the notebook much more closely than the normal approximation.
+def lowAdj1 =
+    if enoughHistory then
+        fold lowIdx1 = 1 to 51
+        with lowAcc1 = huge
+        do Min(
+            lowAcc1,
+            (
+                if lowIdx1 == 1 then ret01 else
+                if lowIdx1 == 2 then ret02 else
+                if lowIdx1 == 3 then ret03 else
+                if lowIdx1 == 4 then ret04 else
+                if lowIdx1 == 5 then ret05 else
+                if lowIdx1 == 6 then ret06 else
+                if lowIdx1 == 7 then ret07 else
+                if lowIdx1 == 8 then ret08 else
+                if lowIdx1 == 9 then ret09 else
+                if lowIdx1 == 10 then ret10 else
+                if lowIdx1 == 11 then ret11 else
+                if lowIdx1 == 12 then ret12 else
+                if lowIdx1 == 13 then ret13 else
+                if lowIdx1 == 14 then ret14 else
+                if lowIdx1 == 15 then ret15 else
+                if lowIdx1 == 16 then ret16 else
+                if lowIdx1 == 17 then ret17 else
+                if lowIdx1 == 18 then ret18 else
+                if lowIdx1 == 19 then ret19 else
+                if lowIdx1 == 20 then ret20 else
+                if lowIdx1 == 21 then ret21 else
+                if lowIdx1 == 22 then ret22 else
+                if lowIdx1 == 23 then ret23 else
+                if lowIdx1 == 24 then ret24 else
+                if lowIdx1 == 25 then ret25 else
+                if lowIdx1 == 26 then ret26 else
+                if lowIdx1 == 27 then ret27 else
+                if lowIdx1 == 28 then ret28 else
+                if lowIdx1 == 29 then ret29 else
+                if lowIdx1 == 30 then ret30 else
+                if lowIdx1 == 31 then ret31 else
+                if lowIdx1 == 32 then ret32 else
+                if lowIdx1 == 33 then ret33 else
+                if lowIdx1 == 34 then ret34 else
+                if lowIdx1 == 35 then ret35 else
+                if lowIdx1 == 36 then ret36 else
+                if lowIdx1 == 37 then ret37 else
+                if lowIdx1 == 38 then ret38 else
+                if lowIdx1 == 39 then ret39 else
+                if lowIdx1 == 40 then ret40 else
+                if lowIdx1 == 41 then ret41 else
+                if lowIdx1 == 42 then ret42 else
+                if lowIdx1 == 43 then ret43 else
+                if lowIdx1 == 44 then ret44 else
+                if lowIdx1 == 45 then ret45 else
+                if lowIdx1 == 46 then ret46 else
+                if lowIdx1 == 47 then ret47 else
+                if lowIdx1 == 48 then ret48 else
+                if lowIdx1 == 49 then ret49 else
+                ret50
+            ) + eps * lowIdx1
+        )
+    else Double.NaN;
+
+def lowAdj2 =
+    if enoughHistory then
+        fold lowIdx2 = 1 to 51
+        with lowAcc2 = huge
+        do Min(
+            lowAcc2,
+            if (
+                if lowIdx2 == 1 then ret01 else
+                if lowIdx2 == 2 then ret02 else
+                if lowIdx2 == 3 then ret03 else
+                if lowIdx2 == 4 then ret04 else
+                if lowIdx2 == 5 then ret05 else
+                if lowIdx2 == 6 then ret06 else
+                if lowIdx2 == 7 then ret07 else
+                if lowIdx2 == 8 then ret08 else
+                if lowIdx2 == 9 then ret09 else
+                if lowIdx2 == 10 then ret10 else
+                if lowIdx2 == 11 then ret11 else
+                if lowIdx2 == 12 then ret12 else
+                if lowIdx2 == 13 then ret13 else
+                if lowIdx2 == 14 then ret14 else
+                if lowIdx2 == 15 then ret15 else
+                if lowIdx2 == 16 then ret16 else
+                if lowIdx2 == 17 then ret17 else
+                if lowIdx2 == 18 then ret18 else
+                if lowIdx2 == 19 then ret19 else
+                if lowIdx2 == 20 then ret20 else
+                if lowIdx2 == 21 then ret21 else
+                if lowIdx2 == 22 then ret22 else
+                if lowIdx2 == 23 then ret23 else
+                if lowIdx2 == 24 then ret24 else
+                if lowIdx2 == 25 then ret25 else
+                if lowIdx2 == 26 then ret26 else
+                if lowIdx2 == 27 then ret27 else
+                if lowIdx2 == 28 then ret28 else
+                if lowIdx2 == 29 then ret29 else
+                if lowIdx2 == 30 then ret30 else
+                if lowIdx2 == 31 then ret31 else
+                if lowIdx2 == 32 then ret32 else
+                if lowIdx2 == 33 then ret33 else
+                if lowIdx2 == 34 then ret34 else
+                if lowIdx2 == 35 then ret35 else
+                if lowIdx2 == 36 then ret36 else
+                if lowIdx2 == 37 then ret37 else
+                if lowIdx2 == 38 then ret38 else
+                if lowIdx2 == 39 then ret39 else
+                if lowIdx2 == 40 then ret40 else
+                if lowIdx2 == 41 then ret41 else
+                if lowIdx2 == 42 then ret42 else
+                if lowIdx2 == 43 then ret43 else
+                if lowIdx2 == 44 then ret44 else
+                if lowIdx2 == 45 then ret45 else
+                if lowIdx2 == 46 then ret46 else
+                if lowIdx2 == 47 then ret47 else
+                if lowIdx2 == 48 then ret48 else
+                if lowIdx2 == 49 then ret49 else
+                ret50
+            ) + eps * lowIdx2 > lowAdj1
+            then
+                (
+                if lowIdx2 == 1 then ret01 else
+                if lowIdx2 == 2 then ret02 else
+                if lowIdx2 == 3 then ret03 else
+                if lowIdx2 == 4 then ret04 else
+                if lowIdx2 == 5 then ret05 else
+                if lowIdx2 == 6 then ret06 else
+                if lowIdx2 == 7 then ret07 else
+                if lowIdx2 == 8 then ret08 else
+                if lowIdx2 == 9 then ret09 else
+                if lowIdx2 == 10 then ret10 else
+                if lowIdx2 == 11 then ret11 else
+                if lowIdx2 == 12 then ret12 else
+                if lowIdx2 == 13 then ret13 else
+                if lowIdx2 == 14 then ret14 else
+                if lowIdx2 == 15 then ret15 else
+                if lowIdx2 == 16 then ret16 else
+                if lowIdx2 == 17 then ret17 else
+                if lowIdx2 == 18 then ret18 else
+                if lowIdx2 == 19 then ret19 else
+                if lowIdx2 == 20 then ret20 else
+                if lowIdx2 == 21 then ret21 else
+                if lowIdx2 == 22 then ret22 else
+                if lowIdx2 == 23 then ret23 else
+                if lowIdx2 == 24 then ret24 else
+                if lowIdx2 == 25 then ret25 else
+                if lowIdx2 == 26 then ret26 else
+                if lowIdx2 == 27 then ret27 else
+                if lowIdx2 == 28 then ret28 else
+                if lowIdx2 == 29 then ret29 else
+                if lowIdx2 == 30 then ret30 else
+                if lowIdx2 == 31 then ret31 else
+                if lowIdx2 == 32 then ret32 else
+                if lowIdx2 == 33 then ret33 else
+                if lowIdx2 == 34 then ret34 else
+                if lowIdx2 == 35 then ret35 else
+                if lowIdx2 == 36 then ret36 else
+                if lowIdx2 == 37 then ret37 else
+                if lowIdx2 == 38 then ret38 else
+                if lowIdx2 == 39 then ret39 else
+                if lowIdx2 == 40 then ret40 else
+                if lowIdx2 == 41 then ret41 else
+                if lowIdx2 == 42 then ret42 else
+                if lowIdx2 == 43 then ret43 else
+                if lowIdx2 == 44 then ret44 else
+                if lowIdx2 == 45 then ret45 else
+                if lowIdx2 == 46 then ret46 else
+                if lowIdx2 == 47 then ret47 else
+                if lowIdx2 == 48 then ret48 else
+                if lowIdx2 == 49 then ret49 else
+                ret50
+                ) + eps * lowIdx2
+            else huge
+        )
+    else Double.NaN;
+
+def lowAdj3 =
+    if enoughHistory then
+        fold lowIdx3 = 1 to 51
+        with lowAcc3 = huge
+        do Min(
+            lowAcc3,
+            if (
+                if lowIdx3 == 1 then ret01 else
+                if lowIdx3 == 2 then ret02 else
+                if lowIdx3 == 3 then ret03 else
+                if lowIdx3 == 4 then ret04 else
+                if lowIdx3 == 5 then ret05 else
+                if lowIdx3 == 6 then ret06 else
+                if lowIdx3 == 7 then ret07 else
+                if lowIdx3 == 8 then ret08 else
+                if lowIdx3 == 9 then ret09 else
+                if lowIdx3 == 10 then ret10 else
+                if lowIdx3 == 11 then ret11 else
+                if lowIdx3 == 12 then ret12 else
+                if lowIdx3 == 13 then ret13 else
+                if lowIdx3 == 14 then ret14 else
+                if lowIdx3 == 15 then ret15 else
+                if lowIdx3 == 16 then ret16 else
+                if lowIdx3 == 17 then ret17 else
+                if lowIdx3 == 18 then ret18 else
+                if lowIdx3 == 19 then ret19 else
+                if lowIdx3 == 20 then ret20 else
+                if lowIdx3 == 21 then ret21 else
+                if lowIdx3 == 22 then ret22 else
+                if lowIdx3 == 23 then ret23 else
+                if lowIdx3 == 24 then ret24 else
+                if lowIdx3 == 25 then ret25 else
+                if lowIdx3 == 26 then ret26 else
+                if lowIdx3 == 27 then ret27 else
+                if lowIdx3 == 28 then ret28 else
+                if lowIdx3 == 29 then ret29 else
+                if lowIdx3 == 30 then ret30 else
+                if lowIdx3 == 31 then ret31 else
+                if lowIdx3 == 32 then ret32 else
+                if lowIdx3 == 33 then ret33 else
+                if lowIdx3 == 34 then ret34 else
+                if lowIdx3 == 35 then ret35 else
+                if lowIdx3 == 36 then ret36 else
+                if lowIdx3 == 37 then ret37 else
+                if lowIdx3 == 38 then ret38 else
+                if lowIdx3 == 39 then ret39 else
+                if lowIdx3 == 40 then ret40 else
+                if lowIdx3 == 41 then ret41 else
+                if lowIdx3 == 42 then ret42 else
+                if lowIdx3 == 43 then ret43 else
+                if lowIdx3 == 44 then ret44 else
+                if lowIdx3 == 45 then ret45 else
+                if lowIdx3 == 46 then ret46 else
+                if lowIdx3 == 47 then ret47 else
+                if lowIdx3 == 48 then ret48 else
+                if lowIdx3 == 49 then ret49 else
+                ret50
+            ) + eps * lowIdx3 > lowAdj2
+            then
+                (
+                if lowIdx3 == 1 then ret01 else
+                if lowIdx3 == 2 then ret02 else
+                if lowIdx3 == 3 then ret03 else
+                if lowIdx3 == 4 then ret04 else
+                if lowIdx3 == 5 then ret05 else
+                if lowIdx3 == 6 then ret06 else
+                if lowIdx3 == 7 then ret07 else
+                if lowIdx3 == 8 then ret08 else
+                if lowIdx3 == 9 then ret09 else
+                if lowIdx3 == 10 then ret10 else
+                if lowIdx3 == 11 then ret11 else
+                if lowIdx3 == 12 then ret12 else
+                if lowIdx3 == 13 then ret13 else
+                if lowIdx3 == 14 then ret14 else
+                if lowIdx3 == 15 then ret15 else
+                if lowIdx3 == 16 then ret16 else
+                if lowIdx3 == 17 then ret17 else
+                if lowIdx3 == 18 then ret18 else
+                if lowIdx3 == 19 then ret19 else
+                if lowIdx3 == 20 then ret20 else
+                if lowIdx3 == 21 then ret21 else
+                if lowIdx3 == 22 then ret22 else
+                if lowIdx3 == 23 then ret23 else
+                if lowIdx3 == 24 then ret24 else
+                if lowIdx3 == 25 then ret25 else
+                if lowIdx3 == 26 then ret26 else
+                if lowIdx3 == 27 then ret27 else
+                if lowIdx3 == 28 then ret28 else
+                if lowIdx3 == 29 then ret29 else
+                if lowIdx3 == 30 then ret30 else
+                if lowIdx3 == 31 then ret31 else
+                if lowIdx3 == 32 then ret32 else
+                if lowIdx3 == 33 then ret33 else
+                if lowIdx3 == 34 then ret34 else
+                if lowIdx3 == 35 then ret35 else
+                if lowIdx3 == 36 then ret36 else
+                if lowIdx3 == 37 then ret37 else
+                if lowIdx3 == 38 then ret38 else
+                if lowIdx3 == 39 then ret39 else
+                if lowIdx3 == 40 then ret40 else
+                if lowIdx3 == 41 then ret41 else
+                if lowIdx3 == 42 then ret42 else
+                if lowIdx3 == 43 then ret43 else
+                if lowIdx3 == 44 then ret44 else
+                if lowIdx3 == 45 then ret45 else
+                if lowIdx3 == 46 then ret46 else
+                if lowIdx3 == 47 then ret47 else
+                if lowIdx3 == 48 then ret48 else
+                if lowIdx3 == 49 then ret49 else
+                ret50
+                ) + eps * lowIdx3
+            else huge
+        )
+    else Double.NaN;
+
+def lowAdj4 =
+    if enoughHistory then
+        fold lowIdx4 = 1 to 51
+        with lowAcc4 = huge
+        do Min(
+            lowAcc4,
+            if (
+                if lowIdx4 == 1 then ret01 else
+                if lowIdx4 == 2 then ret02 else
+                if lowIdx4 == 3 then ret03 else
+                if lowIdx4 == 4 then ret04 else
+                if lowIdx4 == 5 then ret05 else
+                if lowIdx4 == 6 then ret06 else
+                if lowIdx4 == 7 then ret07 else
+                if lowIdx4 == 8 then ret08 else
+                if lowIdx4 == 9 then ret09 else
+                if lowIdx4 == 10 then ret10 else
+                if lowIdx4 == 11 then ret11 else
+                if lowIdx4 == 12 then ret12 else
+                if lowIdx4 == 13 then ret13 else
+                if lowIdx4 == 14 then ret14 else
+                if lowIdx4 == 15 then ret15 else
+                if lowIdx4 == 16 then ret16 else
+                if lowIdx4 == 17 then ret17 else
+                if lowIdx4 == 18 then ret18 else
+                if lowIdx4 == 19 then ret19 else
+                if lowIdx4 == 20 then ret20 else
+                if lowIdx4 == 21 then ret21 else
+                if lowIdx4 == 22 then ret22 else
+                if lowIdx4 == 23 then ret23 else
+                if lowIdx4 == 24 then ret24 else
+                if lowIdx4 == 25 then ret25 else
+                if lowIdx4 == 26 then ret26 else
+                if lowIdx4 == 27 then ret27 else
+                if lowIdx4 == 28 then ret28 else
+                if lowIdx4 == 29 then ret29 else
+                if lowIdx4 == 30 then ret30 else
+                if lowIdx4 == 31 then ret31 else
+                if lowIdx4 == 32 then ret32 else
+                if lowIdx4 == 33 then ret33 else
+                if lowIdx4 == 34 then ret34 else
+                if lowIdx4 == 35 then ret35 else
+                if lowIdx4 == 36 then ret36 else
+                if lowIdx4 == 37 then ret37 else
+                if lowIdx4 == 38 then ret38 else
+                if lowIdx4 == 39 then ret39 else
+                if lowIdx4 == 40 then ret40 else
+                if lowIdx4 == 41 then ret41 else
+                if lowIdx4 == 42 then ret42 else
+                if lowIdx4 == 43 then ret43 else
+                if lowIdx4 == 44 then ret44 else
+                if lowIdx4 == 45 then ret45 else
+                if lowIdx4 == 46 then ret46 else
+                if lowIdx4 == 47 then ret47 else
+                if lowIdx4 == 48 then ret48 else
+                if lowIdx4 == 49 then ret49 else
+                ret50
+            ) + eps * lowIdx4 > lowAdj3
+            then
+                (
+                if lowIdx4 == 1 then ret01 else
+                if lowIdx4 == 2 then ret02 else
+                if lowIdx4 == 3 then ret03 else
+                if lowIdx4 == 4 then ret04 else
+                if lowIdx4 == 5 then ret05 else
+                if lowIdx4 == 6 then ret06 else
+                if lowIdx4 == 7 then ret07 else
+                if lowIdx4 == 8 then ret08 else
+                if lowIdx4 == 9 then ret09 else
+                if lowIdx4 == 10 then ret10 else
+                if lowIdx4 == 11 then ret11 else
+                if lowIdx4 == 12 then ret12 else
+                if lowIdx4 == 13 then ret13 else
+                if lowIdx4 == 14 then ret14 else
+                if lowIdx4 == 15 then ret15 else
+                if lowIdx4 == 16 then ret16 else
+                if lowIdx4 == 17 then ret17 else
+                if lowIdx4 == 18 then ret18 else
+                if lowIdx4 == 19 then ret19 else
+                if lowIdx4 == 20 then ret20 else
+                if lowIdx4 == 21 then ret21 else
+                if lowIdx4 == 22 then ret22 else
+                if lowIdx4 == 23 then ret23 else
+                if lowIdx4 == 24 then ret24 else
+                if lowIdx4 == 25 then ret25 else
+                if lowIdx4 == 26 then ret26 else
+                if lowIdx4 == 27 then ret27 else
+                if lowIdx4 == 28 then ret28 else
+                if lowIdx4 == 29 then ret29 else
+                if lowIdx4 == 30 then ret30 else
+                if lowIdx4 == 31 then ret31 else
+                if lowIdx4 == 32 then ret32 else
+                if lowIdx4 == 33 then ret33 else
+                if lowIdx4 == 34 then ret34 else
+                if lowIdx4 == 35 then ret35 else
+                if lowIdx4 == 36 then ret36 else
+                if lowIdx4 == 37 then ret37 else
+                if lowIdx4 == 38 then ret38 else
+                if lowIdx4 == 39 then ret39 else
+                if lowIdx4 == 40 then ret40 else
+                if lowIdx4 == 41 then ret41 else
+                if lowIdx4 == 42 then ret42 else
+                if lowIdx4 == 43 then ret43 else
+                if lowIdx4 == 44 then ret44 else
+                if lowIdx4 == 45 then ret45 else
+                if lowIdx4 == 46 then ret46 else
+                if lowIdx4 == 47 then ret47 else
+                if lowIdx4 == 48 then ret48 else
+                if lowIdx4 == 49 then ret49 else
+                ret50
+                ) + eps * lowIdx4
+            else huge
+        )
+    else Double.NaN;
+
+def longVarReturn =
+    if enoughHistory
+    then lowAdj3 + 0.45 * (lowAdj4 - lowAdj3)
+    else Double.NaN;
+
+def longTailSum =
+    if enoughHistory then
+        fold longTailIdx = 1 to 51
+        with longTailSumAcc = 0.0
+        do longTailSumAcc + (
+            if (
+                if longTailIdx == 1 then ret01 else
+                if longTailIdx == 2 then ret02 else
+                if longTailIdx == 3 then ret03 else
+                if longTailIdx == 4 then ret04 else
+                if longTailIdx == 5 then ret05 else
+                if longTailIdx == 6 then ret06 else
+                if longTailIdx == 7 then ret07 else
+                if longTailIdx == 8 then ret08 else
+                if longTailIdx == 9 then ret09 else
+                if longTailIdx == 10 then ret10 else
+                if longTailIdx == 11 then ret11 else
+                if longTailIdx == 12 then ret12 else
+                if longTailIdx == 13 then ret13 else
+                if longTailIdx == 14 then ret14 else
+                if longTailIdx == 15 then ret15 else
+                if longTailIdx == 16 then ret16 else
+                if longTailIdx == 17 then ret17 else
+                if longTailIdx == 18 then ret18 else
+                if longTailIdx == 19 then ret19 else
+                if longTailIdx == 20 then ret20 else
+                if longTailIdx == 21 then ret21 else
+                if longTailIdx == 22 then ret22 else
+                if longTailIdx == 23 then ret23 else
+                if longTailIdx == 24 then ret24 else
+                if longTailIdx == 25 then ret25 else
+                if longTailIdx == 26 then ret26 else
+                if longTailIdx == 27 then ret27 else
+                if longTailIdx == 28 then ret28 else
+                if longTailIdx == 29 then ret29 else
+                if longTailIdx == 30 then ret30 else
+                if longTailIdx == 31 then ret31 else
+                if longTailIdx == 32 then ret32 else
+                if longTailIdx == 33 then ret33 else
+                if longTailIdx == 34 then ret34 else
+                if longTailIdx == 35 then ret35 else
+                if longTailIdx == 36 then ret36 else
+                if longTailIdx == 37 then ret37 else
+                if longTailIdx == 38 then ret38 else
+                if longTailIdx == 39 then ret39 else
+                if longTailIdx == 40 then ret40 else
+                if longTailIdx == 41 then ret41 else
+                if longTailIdx == 42 then ret42 else
+                if longTailIdx == 43 then ret43 else
+                if longTailIdx == 44 then ret44 else
+                if longTailIdx == 45 then ret45 else
+                if longTailIdx == 46 then ret46 else
+                if longTailIdx == 47 then ret47 else
+                if longTailIdx == 48 then ret48 else
+                if longTailIdx == 49 then ret49 else
+                ret50
+            ) <= longVarReturn
+            then (
+                if longTailIdx == 1 then ret01 else
+                if longTailIdx == 2 then ret02 else
+                if longTailIdx == 3 then ret03 else
+                if longTailIdx == 4 then ret04 else
+                if longTailIdx == 5 then ret05 else
+                if longTailIdx == 6 then ret06 else
+                if longTailIdx == 7 then ret07 else
+                if longTailIdx == 8 then ret08 else
+                if longTailIdx == 9 then ret09 else
+                if longTailIdx == 10 then ret10 else
+                if longTailIdx == 11 then ret11 else
+                if longTailIdx == 12 then ret12 else
+                if longTailIdx == 13 then ret13 else
+                if longTailIdx == 14 then ret14 else
+                if longTailIdx == 15 then ret15 else
+                if longTailIdx == 16 then ret16 else
+                if longTailIdx == 17 then ret17 else
+                if longTailIdx == 18 then ret18 else
+                if longTailIdx == 19 then ret19 else
+                if longTailIdx == 20 then ret20 else
+                if longTailIdx == 21 then ret21 else
+                if longTailIdx == 22 then ret22 else
+                if longTailIdx == 23 then ret23 else
+                if longTailIdx == 24 then ret24 else
+                if longTailIdx == 25 then ret25 else
+                if longTailIdx == 26 then ret26 else
+                if longTailIdx == 27 then ret27 else
+                if longTailIdx == 28 then ret28 else
+                if longTailIdx == 29 then ret29 else
+                if longTailIdx == 30 then ret30 else
+                if longTailIdx == 31 then ret31 else
+                if longTailIdx == 32 then ret32 else
+                if longTailIdx == 33 then ret33 else
+                if longTailIdx == 34 then ret34 else
+                if longTailIdx == 35 then ret35 else
+                if longTailIdx == 36 then ret36 else
+                if longTailIdx == 37 then ret37 else
+                if longTailIdx == 38 then ret38 else
+                if longTailIdx == 39 then ret39 else
+                if longTailIdx == 40 then ret40 else
+                if longTailIdx == 41 then ret41 else
+                if longTailIdx == 42 then ret42 else
+                if longTailIdx == 43 then ret43 else
+                if longTailIdx == 44 then ret44 else
+                if longTailIdx == 45 then ret45 else
+                if longTailIdx == 46 then ret46 else
+                if longTailIdx == 47 then ret47 else
+                if longTailIdx == 48 then ret48 else
+                if longTailIdx == 49 then ret49 else
+                ret50
+            )
+            else 0.0
+        )
+    else Double.NaN;
+
+def longTailCount =
+    if enoughHistory then
+        fold longCountIdx = 1 to 51
+        with longTailCountAcc = 0
+        do longTailCountAcc + (
+            if (
+                if longCountIdx == 1 then ret01 else
+                if longCountIdx == 2 then ret02 else
+                if longCountIdx == 3 then ret03 else
+                if longCountIdx == 4 then ret04 else
+                if longCountIdx == 5 then ret05 else
+                if longCountIdx == 6 then ret06 else
+                if longCountIdx == 7 then ret07 else
+                if longCountIdx == 8 then ret08 else
+                if longCountIdx == 9 then ret09 else
+                if longCountIdx == 10 then ret10 else
+                if longCountIdx == 11 then ret11 else
+                if longCountIdx == 12 then ret12 else
+                if longCountIdx == 13 then ret13 else
+                if longCountIdx == 14 then ret14 else
+                if longCountIdx == 15 then ret15 else
+                if longCountIdx == 16 then ret16 else
+                if longCountIdx == 17 then ret17 else
+                if longCountIdx == 18 then ret18 else
+                if longCountIdx == 19 then ret19 else
+                if longCountIdx == 20 then ret20 else
+                if longCountIdx == 21 then ret21 else
+                if longCountIdx == 22 then ret22 else
+                if longCountIdx == 23 then ret23 else
+                if longCountIdx == 24 then ret24 else
+                if longCountIdx == 25 then ret25 else
+                if longCountIdx == 26 then ret26 else
+                if longCountIdx == 27 then ret27 else
+                if longCountIdx == 28 then ret28 else
+                if longCountIdx == 29 then ret29 else
+                if longCountIdx == 30 then ret30 else
+                if longCountIdx == 31 then ret31 else
+                if longCountIdx == 32 then ret32 else
+                if longCountIdx == 33 then ret33 else
+                if longCountIdx == 34 then ret34 else
+                if longCountIdx == 35 then ret35 else
+                if longCountIdx == 36 then ret36 else
+                if longCountIdx == 37 then ret37 else
+                if longCountIdx == 38 then ret38 else
+                if longCountIdx == 39 then ret39 else
+                if longCountIdx == 40 then ret40 else
+                if longCountIdx == 41 then ret41 else
+                if longCountIdx == 42 then ret42 else
+                if longCountIdx == 43 then ret43 else
+                if longCountIdx == 44 then ret44 else
+                if longCountIdx == 45 then ret45 else
+                if longCountIdx == 46 then ret46 else
+                if longCountIdx == 47 then ret47 else
+                if longCountIdx == 48 then ret48 else
+                if longCountIdx == 49 then ret49 else
+                ret50
+            ) <= longVarReturn
+            then 1
+            else 0
+        )
+    else 0;
+
+def longCvarReturn =
+    if enoughHistory and longTailCount > 0
+    then longTailSum / longTailCount
+    else Double.NaN;
+
+def highAdj1 =
+    if enoughHistory then
+        fold highIdx1 = 1 to 51
+        with highAcc1 = -huge
+        do Max(
+            highAcc1,
+            (
+                if highIdx1 == 1 then ret01 else
+                if highIdx1 == 2 then ret02 else
+                if highIdx1 == 3 then ret03 else
+                if highIdx1 == 4 then ret04 else
+                if highIdx1 == 5 then ret05 else
+                if highIdx1 == 6 then ret06 else
+                if highIdx1 == 7 then ret07 else
+                if highIdx1 == 8 then ret08 else
+                if highIdx1 == 9 then ret09 else
+                if highIdx1 == 10 then ret10 else
+                if highIdx1 == 11 then ret11 else
+                if highIdx1 == 12 then ret12 else
+                if highIdx1 == 13 then ret13 else
+                if highIdx1 == 14 then ret14 else
+                if highIdx1 == 15 then ret15 else
+                if highIdx1 == 16 then ret16 else
+                if highIdx1 == 17 then ret17 else
+                if highIdx1 == 18 then ret18 else
+                if highIdx1 == 19 then ret19 else
+                if highIdx1 == 20 then ret20 else
+                if highIdx1 == 21 then ret21 else
+                if highIdx1 == 22 then ret22 else
+                if highIdx1 == 23 then ret23 else
+                if highIdx1 == 24 then ret24 else
+                if highIdx1 == 25 then ret25 else
+                if highIdx1 == 26 then ret26 else
+                if highIdx1 == 27 then ret27 else
+                if highIdx1 == 28 then ret28 else
+                if highIdx1 == 29 then ret29 else
+                if highIdx1 == 30 then ret30 else
+                if highIdx1 == 31 then ret31 else
+                if highIdx1 == 32 then ret32 else
+                if highIdx1 == 33 then ret33 else
+                if highIdx1 == 34 then ret34 else
+                if highIdx1 == 35 then ret35 else
+                if highIdx1 == 36 then ret36 else
+                if highIdx1 == 37 then ret37 else
+                if highIdx1 == 38 then ret38 else
+                if highIdx1 == 39 then ret39 else
+                if highIdx1 == 40 then ret40 else
+                if highIdx1 == 41 then ret41 else
+                if highIdx1 == 42 then ret42 else
+                if highIdx1 == 43 then ret43 else
+                if highIdx1 == 44 then ret44 else
+                if highIdx1 == 45 then ret45 else
+                if highIdx1 == 46 then ret46 else
+                if highIdx1 == 47 then ret47 else
+                if highIdx1 == 48 then ret48 else
+                if highIdx1 == 49 then ret49 else
+                ret50
+            ) - eps * highIdx1
+        )
+    else Double.NaN;
+
+def highAdj2 =
+    if enoughHistory then
+        fold highIdx2 = 1 to 51
+        with highAcc2 = -huge
+        do Max(
+            highAcc2,
+            if (
+                if highIdx2 == 1 then ret01 else
+                if highIdx2 == 2 then ret02 else
+                if highIdx2 == 3 then ret03 else
+                if highIdx2 == 4 then ret04 else
+                if highIdx2 == 5 then ret05 else
+                if highIdx2 == 6 then ret06 else
+                if highIdx2 == 7 then ret07 else
+                if highIdx2 == 8 then ret08 else
+                if highIdx2 == 9 then ret09 else
+                if highIdx2 == 10 then ret10 else
+                if highIdx2 == 11 then ret11 else
+                if highIdx2 == 12 then ret12 else
+                if highIdx2 == 13 then ret13 else
+                if highIdx2 == 14 then ret14 else
+                if highIdx2 == 15 then ret15 else
+                if highIdx2 == 16 then ret16 else
+                if highIdx2 == 17 then ret17 else
+                if highIdx2 == 18 then ret18 else
+                if highIdx2 == 19 then ret19 else
+                if highIdx2 == 20 then ret20 else
+                if highIdx2 == 21 then ret21 else
+                if highIdx2 == 22 then ret22 else
+                if highIdx2 == 23 then ret23 else
+                if highIdx2 == 24 then ret24 else
+                if highIdx2 == 25 then ret25 else
+                if highIdx2 == 26 then ret26 else
+                if highIdx2 == 27 then ret27 else
+                if highIdx2 == 28 then ret28 else
+                if highIdx2 == 29 then ret29 else
+                if highIdx2 == 30 then ret30 else
+                if highIdx2 == 31 then ret31 else
+                if highIdx2 == 32 then ret32 else
+                if highIdx2 == 33 then ret33 else
+                if highIdx2 == 34 then ret34 else
+                if highIdx2 == 35 then ret35 else
+                if highIdx2 == 36 then ret36 else
+                if highIdx2 == 37 then ret37 else
+                if highIdx2 == 38 then ret38 else
+                if highIdx2 == 39 then ret39 else
+                if highIdx2 == 40 then ret40 else
+                if highIdx2 == 41 then ret41 else
+                if highIdx2 == 42 then ret42 else
+                if highIdx2 == 43 then ret43 else
+                if highIdx2 == 44 then ret44 else
+                if highIdx2 == 45 then ret45 else
+                if highIdx2 == 46 then ret46 else
+                if highIdx2 == 47 then ret47 else
+                if highIdx2 == 48 then ret48 else
+                if highIdx2 == 49 then ret49 else
+                ret50
+            ) - eps * highIdx2 < highAdj1
+            then
+                (
+                if highIdx2 == 1 then ret01 else
+                if highIdx2 == 2 then ret02 else
+                if highIdx2 == 3 then ret03 else
+                if highIdx2 == 4 then ret04 else
+                if highIdx2 == 5 then ret05 else
+                if highIdx2 == 6 then ret06 else
+                if highIdx2 == 7 then ret07 else
+                if highIdx2 == 8 then ret08 else
+                if highIdx2 == 9 then ret09 else
+                if highIdx2 == 10 then ret10 else
+                if highIdx2 == 11 then ret11 else
+                if highIdx2 == 12 then ret12 else
+                if highIdx2 == 13 then ret13 else
+                if highIdx2 == 14 then ret14 else
+                if highIdx2 == 15 then ret15 else
+                if highIdx2 == 16 then ret16 else
+                if highIdx2 == 17 then ret17 else
+                if highIdx2 == 18 then ret18 else
+                if highIdx2 == 19 then ret19 else
+                if highIdx2 == 20 then ret20 else
+                if highIdx2 == 21 then ret21 else
+                if highIdx2 == 22 then ret22 else
+                if highIdx2 == 23 then ret23 else
+                if highIdx2 == 24 then ret24 else
+                if highIdx2 == 25 then ret25 else
+                if highIdx2 == 26 then ret26 else
+                if highIdx2 == 27 then ret27 else
+                if highIdx2 == 28 then ret28 else
+                if highIdx2 == 29 then ret29 else
+                if highIdx2 == 30 then ret30 else
+                if highIdx2 == 31 then ret31 else
+                if highIdx2 == 32 then ret32 else
+                if highIdx2 == 33 then ret33 else
+                if highIdx2 == 34 then ret34 else
+                if highIdx2 == 35 then ret35 else
+                if highIdx2 == 36 then ret36 else
+                if highIdx2 == 37 then ret37 else
+                if highIdx2 == 38 then ret38 else
+                if highIdx2 == 39 then ret39 else
+                if highIdx2 == 40 then ret40 else
+                if highIdx2 == 41 then ret41 else
+                if highIdx2 == 42 then ret42 else
+                if highIdx2 == 43 then ret43 else
+                if highIdx2 == 44 then ret44 else
+                if highIdx2 == 45 then ret45 else
+                if highIdx2 == 46 then ret46 else
+                if highIdx2 == 47 then ret47 else
+                if highIdx2 == 48 then ret48 else
+                if highIdx2 == 49 then ret49 else
+                ret50
+                ) - eps * highIdx2
+            else -huge
+        )
+    else Double.NaN;
+
+def highAdj3 =
+    if enoughHistory then
+        fold highIdx3 = 1 to 51
+        with highAcc3 = -huge
+        do Max(
+            highAcc3,
+            if (
+                if highIdx3 == 1 then ret01 else
+                if highIdx3 == 2 then ret02 else
+                if highIdx3 == 3 then ret03 else
+                if highIdx3 == 4 then ret04 else
+                if highIdx3 == 5 then ret05 else
+                if highIdx3 == 6 then ret06 else
+                if highIdx3 == 7 then ret07 else
+                if highIdx3 == 8 then ret08 else
+                if highIdx3 == 9 then ret09 else
+                if highIdx3 == 10 then ret10 else
+                if highIdx3 == 11 then ret11 else
+                if highIdx3 == 12 then ret12 else
+                if highIdx3 == 13 then ret13 else
+                if highIdx3 == 14 then ret14 else
+                if highIdx3 == 15 then ret15 else
+                if highIdx3 == 16 then ret16 else
+                if highIdx3 == 17 then ret17 else
+                if highIdx3 == 18 then ret18 else
+                if highIdx3 == 19 then ret19 else
+                if highIdx3 == 20 then ret20 else
+                if highIdx3 == 21 then ret21 else
+                if highIdx3 == 22 then ret22 else
+                if highIdx3 == 23 then ret23 else
+                if highIdx3 == 24 then ret24 else
+                if highIdx3 == 25 then ret25 else
+                if highIdx3 == 26 then ret26 else
+                if highIdx3 == 27 then ret27 else
+                if highIdx3 == 28 then ret28 else
+                if highIdx3 == 29 then ret29 else
+                if highIdx3 == 30 then ret30 else
+                if highIdx3 == 31 then ret31 else
+                if highIdx3 == 32 then ret32 else
+                if highIdx3 == 33 then ret33 else
+                if highIdx3 == 34 then ret34 else
+                if highIdx3 == 35 then ret35 else
+                if highIdx3 == 36 then ret36 else
+                if highIdx3 == 37 then ret37 else
+                if highIdx3 == 38 then ret38 else
+                if highIdx3 == 39 then ret39 else
+                if highIdx3 == 40 then ret40 else
+                if highIdx3 == 41 then ret41 else
+                if highIdx3 == 42 then ret42 else
+                if highIdx3 == 43 then ret43 else
+                if highIdx3 == 44 then ret44 else
+                if highIdx3 == 45 then ret45 else
+                if highIdx3 == 46 then ret46 else
+                if highIdx3 == 47 then ret47 else
+                if highIdx3 == 48 then ret48 else
+                if highIdx3 == 49 then ret49 else
+                ret50
+            ) - eps * highIdx3 < highAdj2
+            then
+                (
+                if highIdx3 == 1 then ret01 else
+                if highIdx3 == 2 then ret02 else
+                if highIdx3 == 3 then ret03 else
+                if highIdx3 == 4 then ret04 else
+                if highIdx3 == 5 then ret05 else
+                if highIdx3 == 6 then ret06 else
+                if highIdx3 == 7 then ret07 else
+                if highIdx3 == 8 then ret08 else
+                if highIdx3 == 9 then ret09 else
+                if highIdx3 == 10 then ret10 else
+                if highIdx3 == 11 then ret11 else
+                if highIdx3 == 12 then ret12 else
+                if highIdx3 == 13 then ret13 else
+                if highIdx3 == 14 then ret14 else
+                if highIdx3 == 15 then ret15 else
+                if highIdx3 == 16 then ret16 else
+                if highIdx3 == 17 then ret17 else
+                if highIdx3 == 18 then ret18 else
+                if highIdx3 == 19 then ret19 else
+                if highIdx3 == 20 then ret20 else
+                if highIdx3 == 21 then ret21 else
+                if highIdx3 == 22 then ret22 else
+                if highIdx3 == 23 then ret23 else
+                if highIdx3 == 24 then ret24 else
+                if highIdx3 == 25 then ret25 else
+                if highIdx3 == 26 then ret26 else
+                if highIdx3 == 27 then ret27 else
+                if highIdx3 == 28 then ret28 else
+                if highIdx3 == 29 then ret29 else
+                if highIdx3 == 30 then ret30 else
+                if highIdx3 == 31 then ret31 else
+                if highIdx3 == 32 then ret32 else
+                if highIdx3 == 33 then ret33 else
+                if highIdx3 == 34 then ret34 else
+                if highIdx3 == 35 then ret35 else
+                if highIdx3 == 36 then ret36 else
+                if highIdx3 == 37 then ret37 else
+                if highIdx3 == 38 then ret38 else
+                if highIdx3 == 39 then ret39 else
+                if highIdx3 == 40 then ret40 else
+                if highIdx3 == 41 then ret41 else
+                if highIdx3 == 42 then ret42 else
+                if highIdx3 == 43 then ret43 else
+                if highIdx3 == 44 then ret44 else
+                if highIdx3 == 45 then ret45 else
+                if highIdx3 == 46 then ret46 else
+                if highIdx3 == 47 then ret47 else
+                if highIdx3 == 48 then ret48 else
+                if highIdx3 == 49 then ret49 else
+                ret50
+                ) - eps * highIdx3
+            else -huge
+        )
+    else Double.NaN;
+
+def highAdj4 =
+    if enoughHistory then
+        fold highIdx4 = 1 to 51
+        with highAcc4 = -huge
+        do Max(
+            highAcc4,
+            if (
+                if highIdx4 == 1 then ret01 else
+                if highIdx4 == 2 then ret02 else
+                if highIdx4 == 3 then ret03 else
+                if highIdx4 == 4 then ret04 else
+                if highIdx4 == 5 then ret05 else
+                if highIdx4 == 6 then ret06 else
+                if highIdx4 == 7 then ret07 else
+                if highIdx4 == 8 then ret08 else
+                if highIdx4 == 9 then ret09 else
+                if highIdx4 == 10 then ret10 else
+                if highIdx4 == 11 then ret11 else
+                if highIdx4 == 12 then ret12 else
+                if highIdx4 == 13 then ret13 else
+                if highIdx4 == 14 then ret14 else
+                if highIdx4 == 15 then ret15 else
+                if highIdx4 == 16 then ret16 else
+                if highIdx4 == 17 then ret17 else
+                if highIdx4 == 18 then ret18 else
+                if highIdx4 == 19 then ret19 else
+                if highIdx4 == 20 then ret20 else
+                if highIdx4 == 21 then ret21 else
+                if highIdx4 == 22 then ret22 else
+                if highIdx4 == 23 then ret23 else
+                if highIdx4 == 24 then ret24 else
+                if highIdx4 == 25 then ret25 else
+                if highIdx4 == 26 then ret26 else
+                if highIdx4 == 27 then ret27 else
+                if highIdx4 == 28 then ret28 else
+                if highIdx4 == 29 then ret29 else
+                if highIdx4 == 30 then ret30 else
+                if highIdx4 == 31 then ret31 else
+                if highIdx4 == 32 then ret32 else
+                if highIdx4 == 33 then ret33 else
+                if highIdx4 == 34 then ret34 else
+                if highIdx4 == 35 then ret35 else
+                if highIdx4 == 36 then ret36 else
+                if highIdx4 == 37 then ret37 else
+                if highIdx4 == 38 then ret38 else
+                if highIdx4 == 39 then ret39 else
+                if highIdx4 == 40 then ret40 else
+                if highIdx4 == 41 then ret41 else
+                if highIdx4 == 42 then ret42 else
+                if highIdx4 == 43 then ret43 else
+                if highIdx4 == 44 then ret44 else
+                if highIdx4 == 45 then ret45 else
+                if highIdx4 == 46 then ret46 else
+                if highIdx4 == 47 then ret47 else
+                if highIdx4 == 48 then ret48 else
+                if highIdx4 == 49 then ret49 else
+                ret50
+            ) - eps * highIdx4 < highAdj3
+            then
+                (
+                if highIdx4 == 1 then ret01 else
+                if highIdx4 == 2 then ret02 else
+                if highIdx4 == 3 then ret03 else
+                if highIdx4 == 4 then ret04 else
+                if highIdx4 == 5 then ret05 else
+                if highIdx4 == 6 then ret06 else
+                if highIdx4 == 7 then ret07 else
+                if highIdx4 == 8 then ret08 else
+                if highIdx4 == 9 then ret09 else
+                if highIdx4 == 10 then ret10 else
+                if highIdx4 == 11 then ret11 else
+                if highIdx4 == 12 then ret12 else
+                if highIdx4 == 13 then ret13 else
+                if highIdx4 == 14 then ret14 else
+                if highIdx4 == 15 then ret15 else
+                if highIdx4 == 16 then ret16 else
+                if highIdx4 == 17 then ret17 else
+                if highIdx4 == 18 then ret18 else
+                if highIdx4 == 19 then ret19 else
+                if highIdx4 == 20 then ret20 else
+                if highIdx4 == 21 then ret21 else
+                if highIdx4 == 22 then ret22 else
+                if highIdx4 == 23 then ret23 else
+                if highIdx4 == 24 then ret24 else
+                if highIdx4 == 25 then ret25 else
+                if highIdx4 == 26 then ret26 else
+                if highIdx4 == 27 then ret27 else
+                if highIdx4 == 28 then ret28 else
+                if highIdx4 == 29 then ret29 else
+                if highIdx4 == 30 then ret30 else
+                if highIdx4 == 31 then ret31 else
+                if highIdx4 == 32 then ret32 else
+                if highIdx4 == 33 then ret33 else
+                if highIdx4 == 34 then ret34 else
+                if highIdx4 == 35 then ret35 else
+                if highIdx4 == 36 then ret36 else
+                if highIdx4 == 37 then ret37 else
+                if highIdx4 == 38 then ret38 else
+                if highIdx4 == 39 then ret39 else
+                if highIdx4 == 40 then ret40 else
+                if highIdx4 == 41 then ret41 else
+                if highIdx4 == 42 then ret42 else
+                if highIdx4 == 43 then ret43 else
+                if highIdx4 == 44 then ret44 else
+                if highIdx4 == 45 then ret45 else
+                if highIdx4 == 46 then ret46 else
+                if highIdx4 == 47 then ret47 else
+                if highIdx4 == 48 then ret48 else
+                if highIdx4 == 49 then ret49 else
+                ret50
+                ) - eps * highIdx4
+            else -huge
+        )
+    else Double.NaN;
+
+def shortVarReturn =
+    if enoughHistory
+    then highAdj4 + 0.55 * (highAdj3 - highAdj4)
+    else Double.NaN;
+
+def shortTailSum =
+    if enoughHistory then
+        fold shortTailIdx = 1 to 51
+        with shortTailSumAcc = 0.0
+        do shortTailSumAcc + (
+            if (
+                if shortTailIdx == 1 then ret01 else
+                if shortTailIdx == 2 then ret02 else
+                if shortTailIdx == 3 then ret03 else
+                if shortTailIdx == 4 then ret04 else
+                if shortTailIdx == 5 then ret05 else
+                if shortTailIdx == 6 then ret06 else
+                if shortTailIdx == 7 then ret07 else
+                if shortTailIdx == 8 then ret08 else
+                if shortTailIdx == 9 then ret09 else
+                if shortTailIdx == 10 then ret10 else
+                if shortTailIdx == 11 then ret11 else
+                if shortTailIdx == 12 then ret12 else
+                if shortTailIdx == 13 then ret13 else
+                if shortTailIdx == 14 then ret14 else
+                if shortTailIdx == 15 then ret15 else
+                if shortTailIdx == 16 then ret16 else
+                if shortTailIdx == 17 then ret17 else
+                if shortTailIdx == 18 then ret18 else
+                if shortTailIdx == 19 then ret19 else
+                if shortTailIdx == 20 then ret20 else
+                if shortTailIdx == 21 then ret21 else
+                if shortTailIdx == 22 then ret22 else
+                if shortTailIdx == 23 then ret23 else
+                if shortTailIdx == 24 then ret24 else
+                if shortTailIdx == 25 then ret25 else
+                if shortTailIdx == 26 then ret26 else
+                if shortTailIdx == 27 then ret27 else
+                if shortTailIdx == 28 then ret28 else
+                if shortTailIdx == 29 then ret29 else
+                if shortTailIdx == 30 then ret30 else
+                if shortTailIdx == 31 then ret31 else
+                if shortTailIdx == 32 then ret32 else
+                if shortTailIdx == 33 then ret33 else
+                if shortTailIdx == 34 then ret34 else
+                if shortTailIdx == 35 then ret35 else
+                if shortTailIdx == 36 then ret36 else
+                if shortTailIdx == 37 then ret37 else
+                if shortTailIdx == 38 then ret38 else
+                if shortTailIdx == 39 then ret39 else
+                if shortTailIdx == 40 then ret40 else
+                if shortTailIdx == 41 then ret41 else
+                if shortTailIdx == 42 then ret42 else
+                if shortTailIdx == 43 then ret43 else
+                if shortTailIdx == 44 then ret44 else
+                if shortTailIdx == 45 then ret45 else
+                if shortTailIdx == 46 then ret46 else
+                if shortTailIdx == 47 then ret47 else
+                if shortTailIdx == 48 then ret48 else
+                if shortTailIdx == 49 then ret49 else
+                ret50
+            ) >= shortVarReturn
+            then (
+                if shortTailIdx == 1 then ret01 else
+                if shortTailIdx == 2 then ret02 else
+                if shortTailIdx == 3 then ret03 else
+                if shortTailIdx == 4 then ret04 else
+                if shortTailIdx == 5 then ret05 else
+                if shortTailIdx == 6 then ret06 else
+                if shortTailIdx == 7 then ret07 else
+                if shortTailIdx == 8 then ret08 else
+                if shortTailIdx == 9 then ret09 else
+                if shortTailIdx == 10 then ret10 else
+                if shortTailIdx == 11 then ret11 else
+                if shortTailIdx == 12 then ret12 else
+                if shortTailIdx == 13 then ret13 else
+                if shortTailIdx == 14 then ret14 else
+                if shortTailIdx == 15 then ret15 else
+                if shortTailIdx == 16 then ret16 else
+                if shortTailIdx == 17 then ret17 else
+                if shortTailIdx == 18 then ret18 else
+                if shortTailIdx == 19 then ret19 else
+                if shortTailIdx == 20 then ret20 else
+                if shortTailIdx == 21 then ret21 else
+                if shortTailIdx == 22 then ret22 else
+                if shortTailIdx == 23 then ret23 else
+                if shortTailIdx == 24 then ret24 else
+                if shortTailIdx == 25 then ret25 else
+                if shortTailIdx == 26 then ret26 else
+                if shortTailIdx == 27 then ret27 else
+                if shortTailIdx == 28 then ret28 else
+                if shortTailIdx == 29 then ret29 else
+                if shortTailIdx == 30 then ret30 else
+                if shortTailIdx == 31 then ret31 else
+                if shortTailIdx == 32 then ret32 else
+                if shortTailIdx == 33 then ret33 else
+                if shortTailIdx == 34 then ret34 else
+                if shortTailIdx == 35 then ret35 else
+                if shortTailIdx == 36 then ret36 else
+                if shortTailIdx == 37 then ret37 else
+                if shortTailIdx == 38 then ret38 else
+                if shortTailIdx == 39 then ret39 else
+                if shortTailIdx == 40 then ret40 else
+                if shortTailIdx == 41 then ret41 else
+                if shortTailIdx == 42 then ret42 else
+                if shortTailIdx == 43 then ret43 else
+                if shortTailIdx == 44 then ret44 else
+                if shortTailIdx == 45 then ret45 else
+                if shortTailIdx == 46 then ret46 else
+                if shortTailIdx == 47 then ret47 else
+                if shortTailIdx == 48 then ret48 else
+                if shortTailIdx == 49 then ret49 else
+                ret50
+            )
+            else 0.0
+        )
+    else Double.NaN;
+
+def shortTailCount =
+    if enoughHistory then
+        fold shortCountIdx = 1 to 51
+        with shortTailCountAcc = 0
+        do shortTailCountAcc + (
+            if (
+                if shortCountIdx == 1 then ret01 else
+                if shortCountIdx == 2 then ret02 else
+                if shortCountIdx == 3 then ret03 else
+                if shortCountIdx == 4 then ret04 else
+                if shortCountIdx == 5 then ret05 else
+                if shortCountIdx == 6 then ret06 else
+                if shortCountIdx == 7 then ret07 else
+                if shortCountIdx == 8 then ret08 else
+                if shortCountIdx == 9 then ret09 else
+                if shortCountIdx == 10 then ret10 else
+                if shortCountIdx == 11 then ret11 else
+                if shortCountIdx == 12 then ret12 else
+                if shortCountIdx == 13 then ret13 else
+                if shortCountIdx == 14 then ret14 else
+                if shortCountIdx == 15 then ret15 else
+                if shortCountIdx == 16 then ret16 else
+                if shortCountIdx == 17 then ret17 else
+                if shortCountIdx == 18 then ret18 else
+                if shortCountIdx == 19 then ret19 else
+                if shortCountIdx == 20 then ret20 else
+                if shortCountIdx == 21 then ret21 else
+                if shortCountIdx == 22 then ret22 else
+                if shortCountIdx == 23 then ret23 else
+                if shortCountIdx == 24 then ret24 else
+                if shortCountIdx == 25 then ret25 else
+                if shortCountIdx == 26 then ret26 else
+                if shortCountIdx == 27 then ret27 else
+                if shortCountIdx == 28 then ret28 else
+                if shortCountIdx == 29 then ret29 else
+                if shortCountIdx == 30 then ret30 else
+                if shortCountIdx == 31 then ret31 else
+                if shortCountIdx == 32 then ret32 else
+                if shortCountIdx == 33 then ret33 else
+                if shortCountIdx == 34 then ret34 else
+                if shortCountIdx == 35 then ret35 else
+                if shortCountIdx == 36 then ret36 else
+                if shortCountIdx == 37 then ret37 else
+                if shortCountIdx == 38 then ret38 else
+                if shortCountIdx == 39 then ret39 else
+                if shortCountIdx == 40 then ret40 else
+                if shortCountIdx == 41 then ret41 else
+                if shortCountIdx == 42 then ret42 else
+                if shortCountIdx == 43 then ret43 else
+                if shortCountIdx == 44 then ret44 else
+                if shortCountIdx == 45 then ret45 else
+                if shortCountIdx == 46 then ret46 else
+                if shortCountIdx == 47 then ret47 else
+                if shortCountIdx == 48 then ret48 else
+                if shortCountIdx == 49 then ret49 else
+                ret50
+            ) >= shortVarReturn
+            then 1
+            else 0
+        )
+    else 0;
+
+def shortCvarReturn =
+    if enoughHistory and shortTailCount > 0
+    then shortTailSum / shortTailCount
+    else Double.NaN;
+
+def longVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longVarReturn)
+    else Double.NaN;
+
+def shortVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortVarReturn)
+    else Double.NaN;
+
+def longCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longCvarReturn)
+    else Double.NaN;
+
+def shortCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortCvarReturn)
+    else Double.NaN;
+
+def orH =
+    if openingBell
+    then h
+    else if orActive and h > orH[1]
+    then h
+    else orH[1];
+
+def orL =
+    if openingBell
+    then l
+    else if orActive and l < orL[1]
+    then l
+    else orL[1];
+
+def orMeanH =
+    if openingBell
+    then h
+    else if orMeanActive and h > orMeanH[1]
+    then h
+    else orMeanH[1];
+
+def orMeanL =
+    if openingBell
+    then l
+    else if orMeanActive and l < orMeanL[1]
+    then l
+    else orMeanL[1];
+
+def orMean =
+    Round(((orMeanH + orMeanL) / 2) / TickSize(), 0) * TickSize();
+
+plot LongVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then longVarPrice
+    else Double.NaN;
+LongVaR95.SetDefaultColor(Color.RED);
+LongVaR95.SetLineWeight(2);
+LongVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot LongCVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then longCvarPrice
+    else Double.NaN;
+LongCVaR95.SetDefaultColor(Color.RED);
+LongCVaR95.SetLineWeight(2);
+
+plot ShortVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then shortVarPrice
+    else Double.NaN;
+ShortVaR95.SetDefaultColor(Color.RED);
+ShortVaR95.SetLineWeight(2);
+ShortVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot ShortCVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then shortCvarPrice
+    else Double.NaN;
+ShortCVaR95.SetDefaultColor(Color.RED);
+ShortCVaR95.SetLineWeight(2);
+
+plot ORHighLine =
+    if showOpeningRange and !orActive and rth
+    then orH
+    else Double.NaN;
+ORHighLine.SetStyle(Curve.LONG_DASH);
+ORHighLine.SetLineWeight(3);
+ORHighLine.SetDefaultColor(Color.YELLOW);
+
+plot ORLowLine =
+    if showOpeningRange and !orActive and rth
+    then orL
+    else Double.NaN;
+ORLowLine.SetStyle(Curve.LONG_DASH);
+ORLowLine.SetLineWeight(3);
+ORLowLine.SetDefaultColor(Color.YELLOW);
+
+plot ORMeanLine =
+    if showOpeningRange and !orMeanActive and rth
+    then orMean
+    else Double.NaN;
+ORMeanLine.SetStyle(Curve.LONG_DASH);
+ORMeanLine.SetLineWeight(3);
+ORMeanLine.SetDefaultColor(Color.YELLOW);

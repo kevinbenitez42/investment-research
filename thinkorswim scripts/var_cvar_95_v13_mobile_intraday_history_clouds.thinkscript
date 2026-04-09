@@ -1,0 +1,329 @@
+# Mobile-first fallback version with simplified line styling.
+# It builds the last 50 completed daily open-to-close returns from intraday
+# session open/close captures and computes 1-day 95% VaR/CVaR levels from
+# that rolling history, using line-only styling for mobile compatibility.
+
+declare upper;
+
+input showVaRCVaR = yes;
+input showOpeningRange = yes;
+
+def z95 = 1.64485362695147;
+def es95 = 2.06271280750743;
+
+def o = open;
+def h = high;
+def l = low;
+def c = close;
+
+def sessionStart = RegularTradingStart(GetYYYYMMDD());
+def sessionEnd = RegularTradingEnd(GetYYYYMMDD());
+
+def openingBell =
+    GetTime()[1] < sessionStart and
+    GetTime() > sessionStart;
+
+def rth =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionEnd;
+
+def orActive =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionStart + 1800000;
+
+def orMeanActive =
+    GetTime() >= sessionStart and
+    GetTime() <= sessionStart + 300000;
+
+def sessionOpen =
+    CompoundValue(
+        1,
+        if openingBell then o else sessionOpen[1],
+        o
+    );
+
+def sessionClose =
+    CompoundValue(
+        1,
+        if rth then c else sessionClose[1],
+        c
+    );
+
+def completedReturnAtOpen =
+    if openingBell and !IsNaN(sessionOpen[1]) and !IsNaN(sessionClose[1])
+    then sessionClose[1] / sessionOpen[1] - 1
+    else Double.NaN;
+
+def ret01 =
+    CompoundValue(1, if openingBell then completedReturnAtOpen else ret01[1], Double.NaN);
+def ret02 =
+    CompoundValue(1, if openingBell then ret01[1] else ret02[1], Double.NaN);
+def ret03 =
+    CompoundValue(1, if openingBell then ret02[1] else ret03[1], Double.NaN);
+def ret04 =
+    CompoundValue(1, if openingBell then ret03[1] else ret04[1], Double.NaN);
+def ret05 =
+    CompoundValue(1, if openingBell then ret04[1] else ret05[1], Double.NaN);
+def ret06 =
+    CompoundValue(1, if openingBell then ret05[1] else ret06[1], Double.NaN);
+def ret07 =
+    CompoundValue(1, if openingBell then ret06[1] else ret07[1], Double.NaN);
+def ret08 =
+    CompoundValue(1, if openingBell then ret07[1] else ret08[1], Double.NaN);
+def ret09 =
+    CompoundValue(1, if openingBell then ret08[1] else ret09[1], Double.NaN);
+def ret10 =
+    CompoundValue(1, if openingBell then ret09[1] else ret10[1], Double.NaN);
+def ret11 =
+    CompoundValue(1, if openingBell then ret10[1] else ret11[1], Double.NaN);
+def ret12 =
+    CompoundValue(1, if openingBell then ret11[1] else ret12[1], Double.NaN);
+def ret13 =
+    CompoundValue(1, if openingBell then ret12[1] else ret13[1], Double.NaN);
+def ret14 =
+    CompoundValue(1, if openingBell then ret13[1] else ret14[1], Double.NaN);
+def ret15 =
+    CompoundValue(1, if openingBell then ret14[1] else ret15[1], Double.NaN);
+def ret16 =
+    CompoundValue(1, if openingBell then ret15[1] else ret16[1], Double.NaN);
+def ret17 =
+    CompoundValue(1, if openingBell then ret16[1] else ret17[1], Double.NaN);
+def ret18 =
+    CompoundValue(1, if openingBell then ret17[1] else ret18[1], Double.NaN);
+def ret19 =
+    CompoundValue(1, if openingBell then ret18[1] else ret19[1], Double.NaN);
+def ret20 =
+    CompoundValue(1, if openingBell then ret19[1] else ret20[1], Double.NaN);
+def ret21 =
+    CompoundValue(1, if openingBell then ret20[1] else ret21[1], Double.NaN);
+def ret22 =
+    CompoundValue(1, if openingBell then ret21[1] else ret22[1], Double.NaN);
+def ret23 =
+    CompoundValue(1, if openingBell then ret22[1] else ret23[1], Double.NaN);
+def ret24 =
+    CompoundValue(1, if openingBell then ret23[1] else ret24[1], Double.NaN);
+def ret25 =
+    CompoundValue(1, if openingBell then ret24[1] else ret25[1], Double.NaN);
+def ret26 =
+    CompoundValue(1, if openingBell then ret25[1] else ret26[1], Double.NaN);
+def ret27 =
+    CompoundValue(1, if openingBell then ret26[1] else ret27[1], Double.NaN);
+def ret28 =
+    CompoundValue(1, if openingBell then ret27[1] else ret28[1], Double.NaN);
+def ret29 =
+    CompoundValue(1, if openingBell then ret28[1] else ret29[1], Double.NaN);
+def ret30 =
+    CompoundValue(1, if openingBell then ret29[1] else ret30[1], Double.NaN);
+def ret31 =
+    CompoundValue(1, if openingBell then ret30[1] else ret31[1], Double.NaN);
+def ret32 =
+    CompoundValue(1, if openingBell then ret31[1] else ret32[1], Double.NaN);
+def ret33 =
+    CompoundValue(1, if openingBell then ret32[1] else ret33[1], Double.NaN);
+def ret34 =
+    CompoundValue(1, if openingBell then ret33[1] else ret34[1], Double.NaN);
+def ret35 =
+    CompoundValue(1, if openingBell then ret34[1] else ret35[1], Double.NaN);
+def ret36 =
+    CompoundValue(1, if openingBell then ret35[1] else ret36[1], Double.NaN);
+def ret37 =
+    CompoundValue(1, if openingBell then ret36[1] else ret37[1], Double.NaN);
+def ret38 =
+    CompoundValue(1, if openingBell then ret37[1] else ret38[1], Double.NaN);
+def ret39 =
+    CompoundValue(1, if openingBell then ret38[1] else ret39[1], Double.NaN);
+def ret40 =
+    CompoundValue(1, if openingBell then ret39[1] else ret40[1], Double.NaN);
+def ret41 =
+    CompoundValue(1, if openingBell then ret40[1] else ret41[1], Double.NaN);
+def ret42 =
+    CompoundValue(1, if openingBell then ret41[1] else ret42[1], Double.NaN);
+def ret43 =
+    CompoundValue(1, if openingBell then ret42[1] else ret43[1], Double.NaN);
+def ret44 =
+    CompoundValue(1, if openingBell then ret43[1] else ret44[1], Double.NaN);
+def ret45 =
+    CompoundValue(1, if openingBell then ret44[1] else ret45[1], Double.NaN);
+def ret46 =
+    CompoundValue(1, if openingBell then ret45[1] else ret46[1], Double.NaN);
+def ret47 =
+    CompoundValue(1, if openingBell then ret46[1] else ret47[1], Double.NaN);
+def ret48 =
+    CompoundValue(1, if openingBell then ret47[1] else ret48[1], Double.NaN);
+def ret49 =
+    CompoundValue(1, if openingBell then ret48[1] else ret49[1], Double.NaN);
+def ret50 =
+    CompoundValue(1, if openingBell then ret49[1] else ret50[1], Double.NaN);
+
+def enoughHistory = !IsNaN(ret50);
+
+def sumA = ret01 + ret02 + ret03 + ret04 + ret05 + ret06 + ret07 + ret08 + ret09 + ret10;
+def sumB = ret11 + ret12 + ret13 + ret14 + ret15 + ret16 + ret17 + ret18 + ret19 + ret20;
+def sumC = ret21 + ret22 + ret23 + ret24 + ret25 + ret26 + ret27 + ret28 + ret29 + ret30;
+def sumD = ret31 + ret32 + ret33 + ret34 + ret35 + ret36 + ret37 + ret38 + ret39 + ret40;
+def sumE = ret41 + ret42 + ret43 + ret44 + ret45 + ret46 + ret47 + ret48 + ret49 + ret50;
+
+def meanReturn =
+    if enoughHistory
+    then (sumA + sumB + sumC + sumD + sumE) / 50
+    else Double.NaN;
+
+def sqA =
+    Sqr(ret01 - meanReturn) + Sqr(ret02 - meanReturn) + Sqr(ret03 - meanReturn) +
+    Sqr(ret04 - meanReturn) + Sqr(ret05 - meanReturn) + Sqr(ret06 - meanReturn) +
+    Sqr(ret07 - meanReturn) + Sqr(ret08 - meanReturn) + Sqr(ret09 - meanReturn) +
+    Sqr(ret10 - meanReturn);
+
+def sqB =
+    Sqr(ret11 - meanReturn) + Sqr(ret12 - meanReturn) + Sqr(ret13 - meanReturn) +
+    Sqr(ret14 - meanReturn) + Sqr(ret15 - meanReturn) + Sqr(ret16 - meanReturn) +
+    Sqr(ret17 - meanReturn) + Sqr(ret18 - meanReturn) + Sqr(ret19 - meanReturn) +
+    Sqr(ret20 - meanReturn);
+
+def sqC =
+    Sqr(ret21 - meanReturn) + Sqr(ret22 - meanReturn) + Sqr(ret23 - meanReturn) +
+    Sqr(ret24 - meanReturn) + Sqr(ret25 - meanReturn) + Sqr(ret26 - meanReturn) +
+    Sqr(ret27 - meanReturn) + Sqr(ret28 - meanReturn) + Sqr(ret29 - meanReturn) +
+    Sqr(ret30 - meanReturn);
+
+def sqD =
+    Sqr(ret31 - meanReturn) + Sqr(ret32 - meanReturn) + Sqr(ret33 - meanReturn) +
+    Sqr(ret34 - meanReturn) + Sqr(ret35 - meanReturn) + Sqr(ret36 - meanReturn) +
+    Sqr(ret37 - meanReturn) + Sqr(ret38 - meanReturn) + Sqr(ret39 - meanReturn) +
+    Sqr(ret40 - meanReturn);
+
+def sqE =
+    Sqr(ret41 - meanReturn) + Sqr(ret42 - meanReturn) + Sqr(ret43 - meanReturn) +
+    Sqr(ret44 - meanReturn) + Sqr(ret45 - meanReturn) + Sqr(ret46 - meanReturn) +
+    Sqr(ret47 - meanReturn) + Sqr(ret48 - meanReturn) + Sqr(ret49 - meanReturn) +
+    Sqr(ret50 - meanReturn);
+
+def sigmaReturn =
+    if enoughHistory
+    then Sqrt((sqA + sqB + sqC + sqD + sqE) / 49)
+    else Double.NaN;
+
+def longVarReturn =
+    if enoughHistory
+    then meanReturn - z95 * sigmaReturn
+    else Double.NaN;
+
+def shortVarReturn =
+    if enoughHistory
+    then meanReturn + z95 * sigmaReturn
+    else Double.NaN;
+
+def longCvarReturn =
+    if enoughHistory
+    then meanReturn - es95 * sigmaReturn
+    else Double.NaN;
+
+def shortCvarReturn =
+    if enoughHistory
+    then meanReturn + es95 * sigmaReturn
+    else Double.NaN;
+
+def longVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longVarReturn)
+    else Double.NaN;
+
+def shortVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortVarReturn)
+    else Double.NaN;
+
+def longCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longCvarReturn)
+    else Double.NaN;
+
+def shortCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortCvarReturn)
+    else Double.NaN;
+
+def orH =
+    if openingBell
+    then h
+    else if orActive and h > orH[1]
+    then h
+    else orH[1];
+
+def orL =
+    if openingBell
+    then l
+    else if orActive and l < orL[1]
+    then l
+    else orL[1];
+
+def orMeanH =
+    if openingBell
+    then h
+    else if orMeanActive and h > orMeanH[1]
+    then h
+    else orMeanH[1];
+
+def orMeanL =
+    if openingBell
+    then l
+    else if orMeanActive and l < orMeanL[1]
+    then l
+    else orMeanL[1];
+
+def orMean =
+    Round(((orMeanH + orMeanL) / 2) / TickSize(), 0) * TickSize();
+
+plot LongVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then longVarPrice
+    else Double.NaN;
+LongVaR95.SetDefaultColor(Color.RED);
+LongVaR95.SetLineWeight(2);
+LongVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot LongCVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then longCvarPrice
+    else Double.NaN;
+LongCVaR95.SetDefaultColor(Color.RED);
+LongCVaR95.SetLineWeight(2);
+
+plot ShortVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then shortVarPrice
+    else Double.NaN;
+ShortVaR95.SetDefaultColor(Color.RED);
+ShortVaR95.SetLineWeight(2);
+ShortVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot ShortCVaR95 =
+    if showVaRCVaR and enoughHistory and rth
+    then shortCvarPrice
+    else Double.NaN;
+ShortCVaR95.SetDefaultColor(Color.RED);
+ShortCVaR95.SetLineWeight(2);
+
+plot ORHighLine =
+    if showOpeningRange and !orActive and rth
+    then orH
+    else Double.NaN;
+ORHighLine.SetStyle(Curve.LONG_DASH);
+ORHighLine.SetLineWeight(3);
+ORHighLine.SetDefaultColor(Color.YELLOW);
+
+plot ORLowLine =
+    if showOpeningRange and !orActive and rth
+    then orL
+    else Double.NaN;
+ORLowLine.SetStyle(Curve.LONG_DASH);
+ORLowLine.SetLineWeight(3);
+ORLowLine.SetDefaultColor(Color.YELLOW);
+
+plot ORMeanLine =
+    if showOpeningRange and !orMeanActive and rth
+    then orMean
+    else Double.NaN;
+ORMeanLine.SetStyle(Curve.LONG_DASH);
+ORMeanLine.SetLineWeight(3);
+ORMeanLine.SetDefaultColor(Color.YELLOW);

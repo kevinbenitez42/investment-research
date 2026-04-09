@@ -1,0 +1,337 @@
+# Mobius-inspired mobile version for Thinkorswim.
+# Uses the Mobius session/time structure for plotting intraday lines and
+# uses explicit prior-day return slots for a stable 50-day 1-day VaR/CVaR.
+
+declare upper;
+
+input showVaRCVaR = yes;
+input showOpeningRange = yes;
+input showPreviousOpenClose = yes;
+
+def o = open;
+def h = high;
+def l = low;
+def c = close;
+
+def openingBell =
+    GetTime()[1] < RegularTradingStart(GetYYYYMMDD()) and
+    GetTime() > RegularTradingStart(GetYYYYMMDD());
+
+def rth =
+    GetTime() >= RegularTradingStart(GetYYYYMMDD()) and
+    GetTime() <= RegularTradingEnd(GetYYYYMMDD());
+
+def afterOpen =
+    GetTime() >= RegularTradingStart(GetYYYYMMDD());
+
+def orActive =
+    GetTime() >= RegularTradingStart(GetYYYYMMDD()) and
+    GetTime() <= RegularTradingStart(GetYYYYMMDD()) + 1800000;
+
+def orMeanActive =
+    GetTime() >= RegularTradingStart(GetYYYYMMDD()) and
+    GetTime() <= RegularTradingStart(GetYYYYMMDD()) + 300000;
+
+def sessionOpen =
+    CompoundValue(
+        1,
+        if openingBell then o else sessionOpen[1],
+        o
+    );
+
+def sessionClose =
+    CompoundValue(
+        1,
+        if rth then c else sessionClose[1],
+        c
+    );
+
+def previousOpen =
+    CompoundValue(
+        1,
+        if openingBell then sessionOpen[1] else previousOpen[1],
+        Double.NaN
+    );
+
+def previousClose =
+    CompoundValue(
+        1,
+        if openingBell then sessionClose[1] else previousClose[1],
+        Double.NaN
+    );
+
+def orH =
+    if openingBell
+    then h
+    else if orActive and h > orH[1]
+    then h
+    else orH[1];
+
+def orL =
+    if openingBell
+    then l
+    else if orActive and l < orL[1]
+    then l
+    else orL[1];
+
+def orMeanH =
+    if openingBell
+    then h
+    else if orMeanActive and h > orMeanH[1]
+    then h
+    else orMeanH[1];
+
+def orMeanL =
+    if openingBell
+    then l
+    else if orMeanActive and l < orMeanL[1]
+    then l
+    else orMeanL[1];
+
+def orMean =
+    Round(((orMeanH + orMeanL) / 2) / TickSize(), 0) * TickSize();
+
+def dayOpen = open(period = AggregationPeriod.DAY);
+def dayClose = close(period = AggregationPeriod.DAY);
+
+def r01 = dayClose[1] / dayOpen[1] - 1;
+def r02 = dayClose[2] / dayOpen[2] - 1;
+def r03 = dayClose[3] / dayOpen[3] - 1;
+def r04 = dayClose[4] / dayOpen[4] - 1;
+def r05 = dayClose[5] / dayOpen[5] - 1;
+def r06 = dayClose[6] / dayOpen[6] - 1;
+def r07 = dayClose[7] / dayOpen[7] - 1;
+def r08 = dayClose[8] / dayOpen[8] - 1;
+def r09 = dayClose[9] / dayOpen[9] - 1;
+def r10 = dayClose[10] / dayOpen[10] - 1;
+def r11 = dayClose[11] / dayOpen[11] - 1;
+def r12 = dayClose[12] / dayOpen[12] - 1;
+def r13 = dayClose[13] / dayOpen[13] - 1;
+def r14 = dayClose[14] / dayOpen[14] - 1;
+def r15 = dayClose[15] / dayOpen[15] - 1;
+def r16 = dayClose[16] / dayOpen[16] - 1;
+def r17 = dayClose[17] / dayOpen[17] - 1;
+def r18 = dayClose[18] / dayOpen[18] - 1;
+def r19 = dayClose[19] / dayOpen[19] - 1;
+def r20 = dayClose[20] / dayOpen[20] - 1;
+def r21 = dayClose[21] / dayOpen[21] - 1;
+def r22 = dayClose[22] / dayOpen[22] - 1;
+def r23 = dayClose[23] / dayOpen[23] - 1;
+def r24 = dayClose[24] / dayOpen[24] - 1;
+def r25 = dayClose[25] / dayOpen[25] - 1;
+def r26 = dayClose[26] / dayOpen[26] - 1;
+def r27 = dayClose[27] / dayOpen[27] - 1;
+def r28 = dayClose[28] / dayOpen[28] - 1;
+def r29 = dayClose[29] / dayOpen[29] - 1;
+def r30 = dayClose[30] / dayOpen[30] - 1;
+def r31 = dayClose[31] / dayOpen[31] - 1;
+def r32 = dayClose[32] / dayOpen[32] - 1;
+def r33 = dayClose[33] / dayOpen[33] - 1;
+def r34 = dayClose[34] / dayOpen[34] - 1;
+def r35 = dayClose[35] / dayOpen[35] - 1;
+def r36 = dayClose[36] / dayOpen[36] - 1;
+def r37 = dayClose[37] / dayOpen[37] - 1;
+def r38 = dayClose[38] / dayOpen[38] - 1;
+def r39 = dayClose[39] / dayOpen[39] - 1;
+def r40 = dayClose[40] / dayOpen[40] - 1;
+def r41 = dayClose[41] / dayOpen[41] - 1;
+def r42 = dayClose[42] / dayOpen[42] - 1;
+def r43 = dayClose[43] / dayOpen[43] - 1;
+def r44 = dayClose[44] / dayOpen[44] - 1;
+def r45 = dayClose[45] / dayOpen[45] - 1;
+def r46 = dayClose[46] / dayOpen[46] - 1;
+def r47 = dayClose[47] / dayOpen[47] - 1;
+def r48 = dayClose[48] / dayOpen[48] - 1;
+def r49 = dayClose[49] / dayOpen[49] - 1;
+def r50 = dayClose[50] / dayOpen[50] - 1;
+
+def enoughDailyHistory = !IsNaN(r50);
+
+def sumA = r01 + r02 + r03 + r04 + r05 + r06 + r07 + r08 + r09 + r10;
+def sumB = r11 + r12 + r13 + r14 + r15 + r16 + r17 + r18 + r19 + r20;
+def sumC = r21 + r22 + r23 + r24 + r25 + r26 + r27 + r28 + r29 + r30;
+def sumD = r31 + r32 + r33 + r34 + r35 + r36 + r37 + r38 + r39 + r40;
+def sumE = r41 + r42 + r43 + r44 + r45 + r46 + r47 + r48 + r49 + r50;
+
+def meanReturn =
+    if enoughDailyHistory
+    then (sumA + sumB + sumC + sumD + sumE) / 50
+    else Double.NaN;
+
+def sqA =
+    (r01 - meanReturn) * (r01 - meanReturn) +
+    (r02 - meanReturn) * (r02 - meanReturn) +
+    (r03 - meanReturn) * (r03 - meanReturn) +
+    (r04 - meanReturn) * (r04 - meanReturn) +
+    (r05 - meanReturn) * (r05 - meanReturn) +
+    (r06 - meanReturn) * (r06 - meanReturn) +
+    (r07 - meanReturn) * (r07 - meanReturn) +
+    (r08 - meanReturn) * (r08 - meanReturn) +
+    (r09 - meanReturn) * (r09 - meanReturn) +
+    (r10 - meanReturn) * (r10 - meanReturn);
+
+def sqB =
+    (r11 - meanReturn) * (r11 - meanReturn) +
+    (r12 - meanReturn) * (r12 - meanReturn) +
+    (r13 - meanReturn) * (r13 - meanReturn) +
+    (r14 - meanReturn) * (r14 - meanReturn) +
+    (r15 - meanReturn) * (r15 - meanReturn) +
+    (r16 - meanReturn) * (r16 - meanReturn) +
+    (r17 - meanReturn) * (r17 - meanReturn) +
+    (r18 - meanReturn) * (r18 - meanReturn) +
+    (r19 - meanReturn) * (r19 - meanReturn) +
+    (r20 - meanReturn) * (r20 - meanReturn);
+
+def sqC =
+    (r21 - meanReturn) * (r21 - meanReturn) +
+    (r22 - meanReturn) * (r22 - meanReturn) +
+    (r23 - meanReturn) * (r23 - meanReturn) +
+    (r24 - meanReturn) * (r24 - meanReturn) +
+    (r25 - meanReturn) * (r25 - meanReturn) +
+    (r26 - meanReturn) * (r26 - meanReturn) +
+    (r27 - meanReturn) * (r27 - meanReturn) +
+    (r28 - meanReturn) * (r28 - meanReturn) +
+    (r29 - meanReturn) * (r29 - meanReturn) +
+    (r30 - meanReturn) * (r30 - meanReturn);
+
+def sqD =
+    (r31 - meanReturn) * (r31 - meanReturn) +
+    (r32 - meanReturn) * (r32 - meanReturn) +
+    (r33 - meanReturn) * (r33 - meanReturn) +
+    (r34 - meanReturn) * (r34 - meanReturn) +
+    (r35 - meanReturn) * (r35 - meanReturn) +
+    (r36 - meanReturn) * (r36 - meanReturn) +
+    (r37 - meanReturn) * (r37 - meanReturn) +
+    (r38 - meanReturn) * (r38 - meanReturn) +
+    (r39 - meanReturn) * (r39 - meanReturn) +
+    (r40 - meanReturn) * (r40 - meanReturn);
+
+def sqE =
+    (r41 - meanReturn) * (r41 - meanReturn) +
+    (r42 - meanReturn) * (r42 - meanReturn) +
+    (r43 - meanReturn) * (r43 - meanReturn) +
+    (r44 - meanReturn) * (r44 - meanReturn) +
+    (r45 - meanReturn) * (r45 - meanReturn) +
+    (r46 - meanReturn) * (r46 - meanReturn) +
+    (r47 - meanReturn) * (r47 - meanReturn) +
+    (r48 - meanReturn) * (r48 - meanReturn) +
+    (r49 - meanReturn) * (r49 - meanReturn) +
+    (r50 - meanReturn) * (r50 - meanReturn);
+
+def sigmaReturn =
+    if enoughDailyHistory
+    then Sqrt((sqA + sqB + sqC + sqD + sqE) / 49)
+    else Double.NaN;
+
+def z95 = 1.64485362695147;
+def es95 = 2.06271280750743;
+
+def longVarReturn =
+    if enoughDailyHistory
+    then meanReturn - z95 * sigmaReturn
+    else Double.NaN;
+
+def shortVarReturn =
+    if enoughDailyHistory
+    then meanReturn + z95 * sigmaReturn
+    else Double.NaN;
+
+def longCvarReturn =
+    if enoughDailyHistory
+    then meanReturn - es95 * sigmaReturn
+    else Double.NaN;
+
+def shortCvarReturn =
+    if enoughDailyHistory
+    then meanReturn + es95 * sigmaReturn
+    else Double.NaN;
+
+def longVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longVarReturn)
+    else Double.NaN;
+
+def shortVarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortVarReturn)
+    else Double.NaN;
+
+def longCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + longCvarReturn)
+    else Double.NaN;
+
+def shortCvarPrice =
+    if !IsNaN(sessionOpen)
+    then sessionOpen * (1 + shortCvarReturn)
+    else Double.NaN;
+
+plot LongVaR95 =
+    if showVaRCVaR and enoughDailyHistory and afterOpen
+    then longVarPrice
+    else Double.NaN;
+LongVaR95.SetDefaultColor(CreateColor(140, 40, 40));
+LongVaR95.SetLineWeight(2);
+LongVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot LongCVaR95 =
+    if showVaRCVaR and enoughDailyHistory and afterOpen
+    then longCvarPrice
+    else Double.NaN;
+LongCVaR95.SetDefaultColor(CreateColor(200, 70, 70));
+LongCVaR95.SetLineWeight(2);
+
+plot ShortVaR95 =
+    if showVaRCVaR and enoughDailyHistory and afterOpen
+    then shortVarPrice
+    else Double.NaN;
+ShortVaR95.SetDefaultColor(CreateColor(40, 110, 60));
+ShortVaR95.SetLineWeight(2);
+ShortVaR95.SetStyle(Curve.SHORT_DASH);
+
+plot ShortCVaR95 =
+    if showVaRCVaR and enoughDailyHistory and afterOpen
+    then shortCvarPrice
+    else Double.NaN;
+ShortCVaR95.SetDefaultColor(CreateColor(60, 150, 90));
+ShortCVaR95.SetLineWeight(2);
+
+plot ORHighLine =
+    if showOpeningRange and !orActive and rth
+    then orH
+    else Double.NaN;
+ORHighLine.SetStyle(Curve.LONG_DASH);
+ORHighLine.SetLineWeight(3);
+ORHighLine.SetDefaultColor(Color.GREEN);
+
+plot ORLowLine =
+    if showOpeningRange and !orActive and rth
+    then orL
+    else Double.NaN;
+ORLowLine.SetStyle(Curve.LONG_DASH);
+ORLowLine.SetLineWeight(3);
+ORLowLine.SetDefaultColor(Color.RED);
+
+plot ORMeanLine =
+    if showOpeningRange and !orMeanActive and rth
+    then orMean
+    else Double.NaN;
+ORMeanLine.SetStyle(Curve.LONG_DASH);
+ORMeanLine.SetLineWeight(3);
+ORMeanLine.SetDefaultColor(Color.YELLOW);
+
+plot PreviousOpenLine =
+    if showPreviousOpenClose and rth
+    then previousOpen
+    else Double.NaN;
+PreviousOpenLine.SetStyle(Curve.MEDIUM_DASH);
+PreviousOpenLine.SetLineWeight(2);
+PreviousOpenLine.SetDefaultColor(CreateColor(70, 120, 210));
+
+plot PreviousCloseLine =
+    if showPreviousOpenClose and rth
+    then previousClose
+    else Double.NaN;
+PreviousCloseLine.SetStyle(Curve.MEDIUM_DASH);
+PreviousCloseLine.SetLineWeight(2);
+PreviousCloseLine.SetDefaultColor(CreateColor(210, 140, 70));
