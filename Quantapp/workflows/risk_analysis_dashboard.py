@@ -94,7 +94,7 @@ def build_risk_analysis_dashboard_payload(config: RiskAnalysisConfig) -> dict[st
     if risk_free_proxy.empty or "Close" not in risk_free_proxy:
         raise ValueError(f"No risk-free history available for {config.risk_free_ticker}.")
 
-    normalized_benchmarks = normalize_benchmark_tickers(benchmark_tickers, ticker_str)
+    normalized_benchmarks = normalize_benchmark_tickers(benchmark_tickers, ticker_str, include_asset=True)
     benchmark_data, skipped_benchmarks = load_benchmark_data(
         normalized_benchmarks,
         config.period,
@@ -567,7 +567,7 @@ def _build_treasury_cards(
     asset_history = yf.Ticker(ticker_str).history(period="max", interval=interval)
     asset_history = helper.simplify_datetime_index(asset_history)
     asset_close = asset_history["Close"].dropna().sort_index()
-    curve_benchmark_tickers = normalize_benchmark_tickers(benchmark_tickers, ticker_str)
+    curve_benchmark_tickers = normalize_benchmark_tickers(benchmark_tickers, ticker_str, include_asset=True)
     benchmark_close_map: dict[str, pd.Series] = {}
     skipped_curve_benchmarks: list[str] = []
     for benchmark_symbol in curve_benchmark_tickers:

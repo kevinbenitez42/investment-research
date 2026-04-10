@@ -2238,6 +2238,7 @@ class Plotter:
             rows=num_factors,
             cols=1,
             shared_xaxes=True,
+            vertical_spacing=0.04,
             subplot_titles=[f"{factor} Beta" for factor in factors_to_plot]
         )
 
@@ -2263,10 +2264,13 @@ class Plotter:
                 annotation_position="bottom right"
             )
 
+        beta_row_height = 220
+        beta_height = min(max(520, beta_row_height * max(num_factors, 1) + 80), 1200)
+
         fig.update_layout(
             title=f'{ticker_str} Rolling Betas',
             template='plotly_dark',
-            height=400 * num_factors,
+            height=beta_height,
             showlegend=False
         )
         beta_fig = fig

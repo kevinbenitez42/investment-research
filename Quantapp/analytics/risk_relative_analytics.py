@@ -77,6 +77,18 @@ class RiskRelativeAnalytics:
         raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
 
     @staticmethod
+    def _zscore_for_plot(series) -> pd.Series:
+        """Return a plot-friendly z-score series, keeping flat comparisons visible at zero."""
+        cleaned = pd.Series(series).dropna().sort_index()
+        if cleaned.empty:
+            return pd.Series(dtype=float)
+
+        zscore_series = calculate_zscore(cleaned)
+        if zscore_series.isna().all():
+            return pd.Series(0.0, index=cleaned.index)
+        return zscore_series.dropna()
+
+    @staticmethod
     def _coerce_benchmark_series(benchmark_series) -> pd.Series:
         if isinstance(benchmark_series, pd.Series):
             series = benchmark_series
@@ -527,7 +539,7 @@ class RiskRelativeAnalytics:
         asset_component_map = asset_component_map or {}
 
         asset_zscore_map = {
-            term: calculate_zscore(asset_sharpe_map[term].dropna()).dropna()
+            term: self._zscore_for_plot(asset_sharpe_map[term])
             for term in term_order
             if term in asset_sharpe_map
         }
@@ -537,9 +549,8 @@ class RiskRelativeAnalytics:
             term_series_map = spread_plot_data.get(term, {})
             summary_zscore_map[term] = {}
             for symbol in benchmark_order:
-                series = term_series_map.get(symbol, pd.Series(dtype=float)).dropna()
-                zscore_series = calculate_zscore(series).dropna() if not series.empty else pd.Series(dtype=float)
-                summary_zscore_map[term][symbol] = zscore_series
+                series = term_series_map.get(symbol, pd.Series(dtype=float))
+                summary_zscore_map[term][symbol] = self._zscore_for_plot(series)
 
         detail_zscore_map = {}
         for symbol in benchmark_order:
@@ -549,15 +560,15 @@ class RiskRelativeAnalytics:
                 term_metrics = symbol_metrics.get(term, {})
                 asset_components = asset_component_map.get(term, {})
                 asset_sharpe = asset_sharpe_map.get(term, pd.Series(dtype=float)).dropna()
-                benchmark_sharpe = calculate_zscore(
-                    term_metrics.get("sharpe_ratio", pd.Series(dtype=float)).dropna()
-                ).dropna()
-                sharpe_spread = calculate_zscore(
-                    term_metrics.get("sharpe_spread", pd.Series(dtype=float)).dropna()
-                ).dropna()
-                relative_spread = calculate_zscore(
-                    term_metrics.get("spread", pd.Series(dtype=float)).dropna()
-                ).dropna()
+                benchmark_sharpe = self._zscore_for_plot(
+                    term_metrics.get("sharpe_ratio", pd.Series(dtype=float))
+                )
+                sharpe_spread = self._zscore_for_plot(
+                    term_metrics.get("sharpe_spread", pd.Series(dtype=float))
+                )
+                relative_spread = self._zscore_for_plot(
+                    term_metrics.get("spread", pd.Series(dtype=float))
+                )
 
                 detail_zscore_map[symbol][term] = {
                     "asset": asset_zscore_map.get(term, pd.Series(dtype=float)),

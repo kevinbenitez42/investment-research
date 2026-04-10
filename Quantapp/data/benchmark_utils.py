@@ -5,16 +5,25 @@ from __future__ import annotations
 import yfinance as yf
 
 
-def normalize_benchmark_tickers(benchmark_tickers, asset_ticker):
-    """Normalize benchmark tickers and remove blanks, duplicates, and the asset ticker."""
+def normalize_benchmark_tickers(benchmark_tickers, asset_ticker, *, include_asset=False):
+    """Normalize benchmark tickers and remove blanks/duplicates, optionally preserving the asset ticker."""
     normalized = []
     seen = set()
-    asset_ticker = str(asset_ticker).upper()
-    for symbol in benchmark_tickers:
+    asset_ticker = str(asset_ticker).strip().upper()
+    if benchmark_tickers is None:
+        candidates = []
+    elif isinstance(benchmark_tickers, str):
+        candidates = benchmark_tickers.split(",")
+    else:
+        candidates = benchmark_tickers
+
+    for symbol in candidates:
         if symbol is None:
             continue
         symbol = str(symbol).strip().upper()
-        if not symbol or symbol == asset_ticker or symbol in seen:
+        if not symbol or symbol in seen:
+            continue
+        if not include_asset and symbol == asset_ticker:
             continue
         normalized.append(symbol)
         seen.add(symbol)
