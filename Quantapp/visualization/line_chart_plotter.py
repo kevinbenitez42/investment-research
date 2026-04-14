@@ -356,7 +356,7 @@ class LineChartPlotter:
 
     def plot_sharpe_sortino_comparison(self, term_config_map, ticker_label="Asset", default_label=None):
         """
-        Plot Sharpe/Sortino z-scores, raw ratios, and Sortino-minus-Sharpe spread z-scores with a term dropdown.
+        Plot Sharpe/Sortino z-scores, raw ratios, and Sortino-minus-Sharpe spread z-scores.
         """
         if not isinstance(term_config_map, Mapping) or not term_config_map:
             raise ValueError("term_config_map must be a non-empty mapping.")
@@ -681,10 +681,22 @@ class LineChartPlotter:
             fig.update_xaxes(range=term_default_ranges[default_label] or [global_start, global_end])
             time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(global_start, global_end, axis_count=3),
-                x=0.22,
+                x=0.22 if len(term_labels) > 1 else 0.01,
             )
         else:
             time_range_menu = None
+
+        updatemenus = []
+        if len(term_labels) > 1:
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=buttons,
+                    x=0.01,
+                    active=term_labels.index(default_label),
+                )
+            )
+        if time_range_menu is not None:
+            updatemenus.append(time_range_menu)
 
         fig.update_layout(
             template="plotly_white",
@@ -696,14 +708,7 @@ class LineChartPlotter:
             yaxis2_title="Ratio Value",
             yaxis3_title="Z-Score",
             title=self._header_title(f"Sharpe & Sortino Analysis for {ticker_label} ({default_label})"),
-            updatemenus=[
-                self._dropdown_menu(
-                    buttons=buttons,
-                    x=0.01,
-                    active=term_labels.index(default_label),
-                )
-            ]
-            + ([time_range_menu] if time_range_menu is not None else []),
+            updatemenus=updatemenus,
         )
         return fig
 
@@ -716,7 +721,7 @@ class LineChartPlotter:
         template="plotly_dark",
     ):
         """
-        Plot benchmark Sharpe-spread z-score summary with term/time dropdowns.
+        Plot benchmark Sharpe-spread z-score summary with optional term/time controls.
         """
         if not isinstance(summary_zscore_map, Mapping) or not summary_zscore_map:
             raise ValueError("summary_zscore_map must be a non-empty mapping.")
@@ -824,10 +829,21 @@ class LineChartPlotter:
             fig.update_xaxes(range=term_default_ranges[default_term] or [global_start, global_end])
             time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(global_start, global_end),
-                x=0.22,
+                x=0.22 if len(term_order) > 1 else 0.0,
             )
         else:
             time_range_menu = None
+
+        updatemenus = []
+        if len(term_order) > 1:
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=timeframe_buttons,
+                    x=0.0,
+                )
+            )
+        if time_range_menu is not None:
+            updatemenus.append(time_range_menu)
 
         fig.update_yaxes(title_text="Sharpe Spread Z-Score", row=1, col=1)
         fig.update_layout(
@@ -838,13 +854,7 @@ class LineChartPlotter:
             margin=self._header_margin(),
             template=template,
             showlegend=True,
-            updatemenus=[
-                self._dropdown_menu(
-                    buttons=timeframe_buttons,
-                    x=0.0,
-                )
-            ]
-            + ([time_range_menu] if time_range_menu is not None else []),
+            updatemenus=updatemenus,
         )
         return fig
 
@@ -1049,11 +1059,12 @@ class LineChartPlotter:
 
         total_traces = len(detail_fig.data)
         buttons = []
+        single_term_view = len(term_order) == 1
         for idx, (symbol, term) in enumerate(detail_view_order):
             visibility = build_detail_visibility_mask(dynamic_trace_count, total_traces, idx, traces_per_view)
             buttons.append(
                 dict(
-                    label=f"{symbol} | {term.title()} ({time_frame_map[term]})",
+                    label=symbol if single_term_view else f"{symbol} | {term.title()} ({time_frame_map[term]})",
                     method="update",
                     args=[
                         {"visible": visibility},
@@ -1077,10 +1088,21 @@ class LineChartPlotter:
             detail_fig.update_xaxes(range=[detail_default_start, detail_end])
             time_range_menu = self._dropdown_menu(
                 buttons=build_time_range_buttons(detail_start, detail_end, axis_count=4),
-                x=0.18,
+                x=0.18 if len(detail_view_order) > 1 else 0.0,
             )
         else:
             time_range_menu = None
+
+        updatemenus = []
+        if len(detail_view_order) > 1:
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=buttons,
+                    x=0.0,
+                )
+            )
+        if time_range_menu is not None:
+            updatemenus.append(time_range_menu)
 
         detail_fig.update_layout(
             title=self._header_title(
@@ -1089,13 +1111,7 @@ class LineChartPlotter:
             height=1350,
             margin=self._header_margin(),
             template=template,
-            updatemenus=[
-                self._dropdown_menu(
-                    buttons=buttons,
-                    x=0.0,
-                )
-            ]
-            + ([time_range_menu] if time_range_menu is not None else []),
+            updatemenus=updatemenus,
         )
         return detail_fig
 
@@ -1924,6 +1940,7 @@ class LineChartPlotter:
         metrics_by_window,
         window_options=None,
         default_window=None,
+        show_window_menu=True,
         ticker_label="Asset",
         title=None,
         candlestick_period=None,
@@ -2113,12 +2130,14 @@ class LineChartPlotter:
             top_annotation["yref"] = "y"
             static_annotations.append(top_annotation)
 
-        menu_specs = [
-            ("Damage window", 0.00),
-            ("View timeframe", 0.18),
-        ]
+        timeframe_menu_x = 0.18 if show_window_menu else 0.0
+        overlay_menu_x = 0.38 if show_window_menu else 0.20
+        menu_specs = []
+        if show_window_menu:
+            menu_specs.append(("Damage window", 0.00))
+        menu_specs.append(("View timeframe", timeframe_menu_x))
         if overlay_trace_indices:
-            menu_specs.append(("Overlay mode", 0.38))
+            menu_specs.append(("Overlay mode", overlay_menu_x))
         for label, x_pos in menu_specs:
             static_annotations.append(
                 dict(
@@ -2465,13 +2484,15 @@ class LineChartPlotter:
             global_start_candidates.append(min(index[0] for index in recovery_indexes))
             global_end_candidates.append(max(index[-1] for index in recovery_indexes))
 
-        updatemenus = [
-            self._dropdown_menu(
-                buttons=window_buttons,
-                x=0.0,
-                active=window_options.index(default_window),
+        updatemenus = []
+        if show_window_menu:
+            updatemenus.append(
+                self._dropdown_menu(
+                    buttons=window_buttons,
+                    x=0.0,
+                    active=window_options.index(default_window),
+                )
             )
-        ]
 
         if global_start_candidates and global_end_candidates:
             global_start = min(global_start_candidates)
@@ -2546,7 +2567,7 @@ class LineChartPlotter:
                         dict(label=label, method="relayout", args=[_combined_range(offset)])
                         for label, offset in timeframe_options
                     ],
-                    x=0.18,
+                    x=timeframe_menu_x,
                     active=default_timeframe_index,
                 )
             )
@@ -2596,7 +2617,7 @@ class LineChartPlotter:
                             ],
                         ),
                     ],
-                    x=0.38,
+                    x=overlay_menu_x,
                     active=0 if default_overlay == "bollinger" else 1,
                 )
             )

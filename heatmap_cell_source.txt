@@ -1,0 +1,443 @@
+# Block 12b: plot stacked rolling Sharpe z-score heatmaps for 1-200 day windows
+
+heatmap_windows = list(range(1, 201))
+heatmap_time_frame_map = {f"window_{window}": window for window in heatmap_windows}
+
+sharpe_heatmap_context = risk_relative_analytics.build_sharpe_sortino_context(
+    analytics=rolling,
+    asset_close=ticker["Close"],
+    time_frame_map=heatmap_time_frame_map,
+    benchmark_data=benchmark_data,
+    risk_free_rate=risk_free_daily_rate,
+)
+
+heatmap_term_config_map = sharpe_heatmap_context["term_config_map"]
+sharpe_zscore_series_by_window = {
+    config["time_frame"]: config["sharpe_zscore"]
+    for config in heatmap_term_config_map.values()
+}
+sharpe_zscore_heatmap = pd.DataFrame(sharpe_zscore_series_by_window).sort_index()
+heatmap_matrix = sharpe_zscore_heatmap.T.reindex(heatmap_windows)
+asset_daily_mean = heatmap_matrix.mean(axis=0, skipna=True).dropna().sort_index()
+
+benchmark_plot_payload = risk_relative_analytics.build_benchmark_plot_payload(
+    asset_sharpe_map=sharpe_heatmap_context["asset_sharpe_map"],
+    asset_component_map=sharpe_heatmap_context["asset_component_map"],
+    benchmark_metrics=sharpe_heatmap_context["benchmark_metrics"],
+    spread_plot_data=sharpe_heatmap_context["spread_plot_data"],
+    time_frame_map=heatmap_time_frame_map,
+)
+
+benchmark_heatmap_matrices = {}
+benchmark_daily_mean = {}
+for symbol in benchmark_plot_payload["benchmark_order"]:
+    symbol_series_by_window = {
+        window: benchmark_plot_payload["summary_zscore_map"].get(term_key, {}).get(symbol, pd.Series(dtype=float))
+        for term_key, window in heatmap_time_frame_map.items()
+    }
+    symbol_heatmap = pd.DataFrame(symbol_series_by_window).sort_index().T.reindex(heatmap_windows)
+    if symbol_heatmap.columns.size > 0:
+        benchmark_heatmap_matrices[symbol] = symbol_heatmap
+        benchmark_daily_mean[symbol] = symbol_heatmap.mean(axis=0, skipna=True).dropna().sort_index()
+
+heatmap_colorscale = [
+    (0.0, "#b2182b"),
+    (0.5, "#f7f7f7"),
+    (1.0, "#1a9850"),
+]
+
+def collect_heatmap_abs_values(matrices):
+    finite_abs_chunks = []
+    for matrix in matrices:
+        if matrix is None or matrix.empty:
+            continue
+        values = matrix.to_numpy(dtype=float)
+        finite_abs_values = np.abs(values[np.isfinite(values)])
+        if finite_abs_values.size > 0:
+            finite_abs_chunks.append(finite_abs_values)
+    if finite_abs_chunks:
+        return np.concatenate(finite_abs_chunks)
+    return np.array([], dtype=float)
+
+def build_heatmap_time_range_buttons(global_start, global_end, axis_count=1):
+    def make_heatmap_time_range(*, months=None, years=None):
+        if months is not None:
+            start = max(global_start, global_end - pd.DateOffset(months=months))
+        elif years is not None:
+            start = max(global_start, global_end - pd.DateOffset(years=years))
+        else:
+            start = global_start
+        layout_updates = {}
+        for axis_idx in range(1, axis_count + 1):
+            axis_name = "xaxis" if axis_idx == 1 else f"xaxis{axis_idx}"
+            layout_updates[f"{axis_name}.range"] = [start, global_end]
+        return dict(method="relayout", args=[layout_updates])
+
+    return [
+        dict(label="10 Years", **make_heatmap_time_range(years=10)),
+        dict(label="5 Years", **make_heatmap_time_range(years=5)),
+        dict(label="3 Years", **make_heatmap_time_range(years=3)),
+        dict(label="1 Year", **make_heatmap_time_range(years=1)),
+        dict(label="6 Months", **make_heatmap_time_range(months=6)),
+        dict(label="3 Months", **make_heatmap_time_range(months=3)),
+        dict(label="1 Month", **make_heatmap_time_range(months=1)),
+    ], max(global_start, global_end - pd.DateOffset(months=6))
+
+def build_secondary_axis_range(series_collection):
+    finite_chunks = []
+    for series in series_collection:
+        if series is None or len(series) == 0:
+            continue
+        values = np.asarray(series, dtype=float)
+        finite_values = values[np.isfinite(values)]
+        if finite_values.size > 0:
+            finite_chunks.append(finite_values)
+    if not finite_chunks:
+        return [-1.0, 1.0]
+    combined_values = np.concatenate(finite_chunks)
+    lower_bound = min(float(combined_values.min()), 0.0)
+    upper_bound = max(float(combined_values.max()), 0.0)
+    span = upper_bound - lower_bound
+    padding = max(span * 0.08, 0.25)
+    return [lower_bound - padding, upper_bound + padding]
+
+asset_heatmap_abs_values = collect_heatmap_abs_values([heatmap_matrix])
+has_asset_values = asset_heatmap_abs_values.size > 0
+asset_observed_max_abs_zscore = float(asset_heatmap_abs_values.max()) if has_asset_values else 1.0
+asset_color_scale_cap = float(np.nanpercentile(asset_heatmap_abs_values, 97.5)) if has_asset_values else 1.0
+asset_color_scale_cap = max(asset_color_scale_cap, 1.0)
+
+benchmark_abs_values = collect_heatmap_abs_values(list(benchmark_heatmap_matrices.values()))
+has_benchmark_values = benchmark_abs_values.size > 0
+benchmark_observed_max_abs_zscore = float(benchmark_abs_values.max()) if has_benchmark_values else 1.0
+benchmark_color_scale_cap = float(np.nanpercentile(benchmark_abs_values, 97.5)) if has_benchmark_values else 1.0
+benchmark_color_scale_cap = max(benchmark_color_scale_cap, 1.0)
+
+benchmark_order_heatmap = [
+    symbol for symbol in benchmark_plot_payload["benchmark_order"] if symbol in benchmark_heatmap_matrices
+]
+default_benchmark_heatmap = benchmark_plot_payload["default_benchmark"]
+if default_benchmark_heatmap not in benchmark_order_heatmap:
+    default_benchmark_heatmap = benchmark_order_heatmap[0] if benchmark_order_heatmap else None
+
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.08,
+    row_heights=[0.5, 0.5],
+    specs=[[{"secondary_y": True}], [{"secondary_y": True}]],
+    subplot_titles=(
+        "Asset Sharpe Z-Score by Rolling Window",
+        "Benchmark Sharpe Spread Z-Score by Rolling Window",
+    ),
+)
+
+constant_trace_indices = []
+
+fig.add_trace(
+    go.Heatmap(
+        z=heatmap_matrix.values,
+        x=heatmap_matrix.columns,
+        y=heatmap_matrix.index,
+        colorscale=heatmap_colorscale,
+        zmid=0,
+        zmin=-asset_color_scale_cap,
+        zmax=asset_color_scale_cap,
+        colorbar=dict(title="Sharpe Z-Score", x=1.11, y=0.81, len=0.34),
+        hovertemplate=(
+            "Date: %{x|%Y-%m-%d}<br>"
+            "Window: %{y} day(s)<br>"
+            "Sharpe Z-Score: %{z:.2f}<extra></extra>"
+        ),
+        showscale=True,
+        name="Asset Heatmap",
+    ),
+    row=1,
+    col=1,
+)
+constant_trace_indices.append(len(fig.data) - 1)
+
+asset_line_x = asset_daily_mean.index if not asset_daily_mean.empty else heatmap_matrix.columns
+if not asset_daily_mean.empty:
+    fig.add_trace(
+        go.Scatter(
+            x=asset_daily_mean.index,
+            y=asset_daily_mean,
+            mode="lines",
+            name="Asset Mean Across Windows",
+            line=dict(color="#38bdf8", width=2.2, dash="dash"),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Mean Sharpe Z-Score: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+    constant_trace_indices.append(len(fig.data) - 1)
+
+if len(asset_line_x) > 0:
+    fig.add_trace(
+        go.Scatter(
+            x=asset_line_x,
+            y=np.zeros(len(asset_line_x)),
+            mode="lines",
+            name="Asset Zero Line",
+            line=dict(color="rgba(226, 232, 240, 0.60)", width=1.4),
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+    constant_trace_indices.append(len(fig.data) - 1)
+
+benchmark_trace_bounds = {}
+for symbol in benchmark_order_heatmap:
+    symbol_matrix = benchmark_heatmap_matrices[symbol]
+    visible = symbol == default_benchmark_heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=symbol_matrix.values,
+            x=symbol_matrix.columns,
+            y=symbol_matrix.index,
+            colorscale=heatmap_colorscale,
+            zmid=0,
+            zmin=-benchmark_color_scale_cap,
+            zmax=benchmark_color_scale_cap,
+            colorbar=dict(title="Sharpe Spread Z-Score", x=1.11, y=0.19, len=0.34),
+            hovertemplate=(
+                "Benchmark: " + symbol + "<br>"
+                "Date: %{x|%Y-%m-%d}<br>"
+                "Window: %{y} day(s)<br>"
+                "Sharpe Spread Z-Score: %{z:.2f}<extra></extra>"
+            ),
+            visible=visible,
+            showscale=True,
+            name=f"{symbol} Heatmap",
+        ),
+        row=2,
+        col=1,
+    )
+    heatmap_trace_idx = len(fig.data) - 1
+
+    symbol_mean = benchmark_daily_mean.get(symbol, pd.Series(dtype=float))
+    fig.add_trace(
+        go.Scatter(
+            x=symbol_mean.index,
+            y=symbol_mean,
+            mode="lines",
+            name="Benchmark Mean Across Windows",
+            line=dict(color="#38bdf8", width=2.2, dash="dash"),
+            hovertemplate=(
+                "Benchmark: " + symbol + "<br>"
+                "Date: %{x|%Y-%m-%d}<br>"
+                "Mean Sharpe Spread Z-Score: %{y:.2f}<extra></extra>"
+            ),
+            visible=visible,
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+    mean_trace_idx = len(fig.data) - 1
+    benchmark_trace_bounds[symbol] = (heatmap_trace_idx, mean_trace_idx)
+
+benchmark_line_x = max(
+    [matrix.columns for matrix in benchmark_heatmap_matrices.values() if matrix.columns.size > 0],
+    key=len,
+    default=pd.Index([]),
+)
+if len(benchmark_line_x) > 0:
+    fig.add_trace(
+        go.Scatter(
+            x=benchmark_line_x,
+            y=np.zeros(len(benchmark_line_x)),
+            mode="lines",
+            name="Benchmark Zero Line",
+            line=dict(color="rgba(226, 232, 240, 0.60)", width=1.4),
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+    constant_trace_indices.append(len(fig.data) - 1)
+
+figure_title = f"{ticker_str} Rolling Sharpe Z-Score Heatmaps (1-200 Day Windows)"
+if default_benchmark_heatmap is not None:
+    figure_title += f" | Benchmark: {default_benchmark_heatmap}"
+
+fig.update_layout(
+    title=figure_title,
+    template="plotly_dark",
+    height=1180,
+    margin=dict(l=70, r=150, t=95, b=55),
+    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0),
+)
+
+fig.update_xaxes(title_text="Date", row=2, col=1)
+fig.update_yaxes(title_text="Rolling Window (Days)", autorange="reversed", row=1, col=1)
+fig.update_yaxes(
+    title_text="Mean Sharpe Z-Score",
+    range=build_secondary_axis_range([asset_daily_mean]),
+    showgrid=False,
+    zeroline=False,
+    row=1,
+    col=1,
+    secondary_y=True,
+)
+fig.update_yaxes(title_text="Rolling Window (Days)", autorange="reversed", row=2, col=1)
+fig.update_yaxes(
+    title_text="Mean Sharpe Spread Z-Score",
+    range=build_secondary_axis_range(benchmark_daily_mean.values()),
+    showgrid=False,
+    zeroline=False,
+    row=2,
+    col=1,
+    secondary_y=True,
+)
+
+updatemenus = []
+
+date_ranges = []
+if heatmap_matrix.columns.size > 0:
+    date_ranges.append((heatmap_matrix.columns.min(), heatmap_matrix.columns.max()))
+date_ranges.extend(
+    (matrix.columns.min(), matrix.columns.max())
+    for matrix in benchmark_heatmap_matrices.values()
+    if matrix.columns.size > 0
+)
+
+if benchmark_order_heatmap:
+    total_traces = len(fig.data)
+    benchmark_buttons = []
+    for symbol in benchmark_order_heatmap:
+        visibility = [False] * total_traces
+        for trace_idx in constant_trace_indices:
+            visibility[trace_idx] = True
+        benchmark_heatmap_idx, benchmark_mean_idx = benchmark_trace_bounds[symbol]
+        visibility[benchmark_heatmap_idx] = True
+        visibility[benchmark_mean_idx] = True
+        benchmark_buttons.append(
+            dict(
+                label=symbol,
+                method="update",
+                args=[
+                    {"visible": visibility},
+                    {
+                        "title": (
+                            f"{ticker_str} Rolling Sharpe Z-Score Heatmaps (1-200 Day Windows) | Benchmark: {symbol}"
+                        )
+                    },
+                ],
+            )
+        )
+    updatemenus.append(
+        dict(
+            buttons=benchmark_buttons,
+            direction="down",
+            showactive=True,
+            x=0.01,
+            y=1.12,
+            xanchor="left",
+            yanchor="top",
+            active=benchmark_order_heatmap.index(default_benchmark_heatmap),
+        )
+    )
+
+if date_ranges:
+    global_start = min(start for start, _ in date_ranges)
+    global_end = max(end for _, end in date_ranges)
+    heatmap_time_range_buttons, default_start = build_heatmap_time_range_buttons(global_start, global_end, axis_count=2)
+    fig.update_xaxes(range=[default_start, global_end], row=1, col=1)
+    fig.update_xaxes(range=[default_start, global_end], row=2, col=1)
+    updatemenus.append(
+        dict(
+            buttons=heatmap_time_range_buttons,
+            direction="down",
+            showactive=True,
+            x=0.18,
+            y=1.12,
+            xanchor="left",
+            yanchor="top",
+            active=4,
+        )
+    )
+
+if updatemenus:
+    fig.update_layout(updatemenus=updatemenus)
+
+if asset_observed_max_abs_zscore > asset_color_scale_cap:
+    fig.add_annotation(
+        text=(
+            f"Asset heatmap color scale capped at +/-{asset_color_scale_cap:.2f}; observed max is "
+            f"{asset_observed_max_abs_zscore:.2f}."
+        ),
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=1.17,
+        xanchor="right",
+        yanchor="top",
+        showarrow=False,
+        font=dict(size=11, color="rgba(220, 220, 220, 0.85)"),
+    )
+
+if 1 in heatmap_matrix.index and heatmap_matrix.loc[1].isna().all():
+    fig.add_annotation(
+        text="Asset 1-day window is blank because rolling Sharpe requires at least two return observations.",
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=1.12,
+        xanchor="right",
+        yanchor="top",
+        showarrow=False,
+        font=dict(size=11, color="rgba(220, 220, 220, 0.85)"),
+    )
+
+if benchmark_order_heatmap and benchmark_observed_max_abs_zscore > benchmark_color_scale_cap:
+    fig.add_annotation(
+        text=(
+            f"Benchmark heatmap color scale capped at +/-{benchmark_color_scale_cap:.2f}; observed max is "
+            f"{benchmark_observed_max_abs_zscore:.2f}."
+        ),
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=0.46,
+        xanchor="right",
+        yanchor="top",
+        showarrow=False,
+        font=dict(size=11, color="rgba(220, 220, 220, 0.85)"),
+    )
+
+if benchmark_order_heatmap:
+    default_benchmark_matrix = benchmark_heatmap_matrices[default_benchmark_heatmap]
+    if 1 in default_benchmark_matrix.index and default_benchmark_matrix.loc[1].isna().all():
+        fig.add_annotation(
+            text="Benchmark 1-day window is blank because rolling Sharpe requires at least two return observations.",
+            xref="paper",
+            yref="paper",
+            x=1,
+            y=0.41,
+            xanchor="right",
+            yanchor="top",
+            showarrow=False,
+            font=dict(size=11, color="rgba(220, 220, 220, 0.85)"),
+        )
+else:
+    fig.add_annotation(
+        text="No benchmark Sharpe spread z-score heatmap data available.",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.25,
+        showarrow=False,
+        font=dict(size=12, color="rgba(220, 220, 220, 0.85)"),
+    )
+
+show_plotly_figure(fig)
