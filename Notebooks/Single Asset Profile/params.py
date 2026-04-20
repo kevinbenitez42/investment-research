@@ -13,7 +13,7 @@ TIMEFRAME_PROFILES = {
 
 
 _BASE_SINGLE_ASSET_NOTEBOOK_PARAMS = {
-    "ticker_str": "UNH",
+    "ticker_str": "NFLX",
     "interval": "1d",
     "risk_free_ticker": "^IRX",
 }
@@ -22,7 +22,7 @@ _BASE_SINGLE_ASSET_NOTEBOOK_PARAMS = {
 _SINGLE_ASSET_PROFILE_PARAMS = {
     **_BASE_SINGLE_ASSET_NOTEBOOK_PARAMS,
     "period": "20y",
-    "benchmark_tickers": ["SPY", "XLV"],
+    "benchmark_tickers": ["SPY"],
     "length_of_plots": 20,
     "trading_strategy": "position",
     "var_position_value": None,

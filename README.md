@@ -1,105 +1,92 @@
-# Investment Platform
+# Investment Research Workspace
 
-This repository is an investment research workspace that is being restructured into an application platform.
+This repository is an investment research workspace that is gradually being reshaped into an application platform.
 
-The long-term application pipeline is:
+The long-term direction is:
 
-`Electron -> React -> FastAPI -> PostgreSQL`
+`Electron -> React -> FastAPI -> shared Python analytics/data layer`
 
-That means the project is evolving from a notebook-first research repo into:
-- an `Electron` desktop shell
-- a `React` frontend
-- a `FastAPI` backend
-- a PostgreSQL-backed data layer
-- shared Python analytics code reused across research and application features
+Today, the repo still has a strong notebook-first workflow, but more reusable logic is being moved into `Quantapp` so it can eventually support desktop, web, and API surfaces without notebook-specific assumptions.
 
-## Project Structure
+## How To Navigate
 
-### `apps/`
-Application entry points and runtime surfaces.
+Start with the README closest to the folder you are working in:
 
-- `apps/desktop`: planned `Electron` desktop application shell
-- `apps/web`: planned `React` frontend
-- `apps/api`: planned `FastAPI` backend and primary application server
-- `apps/worker`: planned background jobs, sync tasks, and long-running processing
+- [`apps/`](apps/README.md): application runtime surfaces
+- [`Quantapp/`](Quantapp/README.md): shared Python library
+- [`Notebooks/`](Notebooks/README.md): research and exploratory work
+- [`company_data/`](company_data/README.md): local ticker-based data cache
+- [`scripts/`](scripts/README.md): maintenance and utility scripts
+- [`thinkorswim scripts/`](<thinkorswim scripts/README.md>): platform-specific thinkScript files
 
-### `packages/`
-Shared code intended to be reused across multiple app layers.
+The older `Project_structure.txt` note has been retired. Folder-level Markdown READMEs are now the source of truth for project organization.
 
-- `packages/python`: future home for reusable Python business logic and analytics packages
-- `packages/typescript`: future home for shared frontend types, API clients, and common TypeScript utilities
+## Repository Map
 
-### `Quantapp`
-Current core Python library for the project.
+### [`apps/`](apps/README.md)
 
-This is the existing reusable analytics layer and is the main source of finance logic that will eventually be migrated or reorganized into the new app structure.
+Application entry points and runtime shells.
 
-Main packages include:
-- `data/`: data-access clients for market, macro, company, and GICS datasets
-- `analytics/`: returns, volatility, rolling statistics, momentum, and risk analysis
-- `visualization/`: Plotly-based chart builders and helpers
-- `models/`: model and forecasting helpers
-- `accounts/`: account-related logic
-- `workflows/`: higher-level assembled analysis workflows
+- [`apps/desktop/`](apps/desktop/README.md): active Electron prototype
+- [`apps/api/`](apps/api/README.md): reserved for the future FastAPI backend
+- [`apps/web/`](apps/web/README.md): reserved for the future browser frontend
+- [`apps/worker/`](apps/worker/README.md): reserved for background jobs and batch processing
 
-### `Notebooks`
-Research and exploration environment.
+### [`Quantapp/`](Quantapp/README.md)
 
-Current notebook groups include:
-- `Single Asset Profile`
-- `Market Profile`
-- `Portfolio Profile`
-- `Development`
-- `research`: reserved for active notebook work under the new structure
-- `archived`: reserved for notebook archives under the new structure
+Current shared Python library for analytics, data loading, charting, and reusable workflows.
 
-The notebooks remain the main place for exploratory analysis while features are being migrated into the application stack.
+Important subpackages:
 
-### `company_data`
-Local company-level data store and cache.
+- [`analytics/`](Quantapp/analytics/README.md)
+- [`data/`](Quantapp/data/README.md)
+- [`visualization/`](Quantapp/visualization/README.md)
+- [`workflows/`](Quantapp/workflows/README.md)
+- [`models/`](Quantapp/models/README.md)
+- [`accounts/`](Quantapp/accounts/README.md)
+- [`config/`](Quantapp/config/README.md)
 
-This currently holds locally saved company financial data and related metadata. Over time, more of this data is expected to move behind the backend and into PostgreSQL-backed workflows.
+### [`Notebooks/`](Notebooks/README.md)
 
-### `infra`
-Infrastructure-level project support.
+Research and exploratory notebook environment.
 
-This folder is intended for operational setup such as PostgreSQL runtime support, local environment infrastructure, containers, deployment helpers, and other environment-level configuration.
+Current notebook groups:
 
-### `docs`
-Project notes, migration plans, architecture notes, and other documentation.
+- [`Single Asset Profile/`](Notebooks/Single%20Asset%20Profile/README.md)
+- [`Market Profile/`](Notebooks/Market%20Profile/README.md)
+- [`Portfolio Profile/`](Notebooks/Portfolio%20Profile/README.md)
+- [`Development/`](Notebooks/Development/README.md)
+- [`_archived/`](Notebooks/_archived/README.md)
 
-### `old projects`
-Archived notebooks and older code kept for reference.
+### [`company_data/`](company_data/README.md)
 
-These files are retained for ideas and historical context but are not the main target structure going forward.
+Local ticker-based company data cache and working store.
 
-### `scripts`
-Helper scripts for development, cleanup, data maintenance, and local workflows.
+### [`scripts/`](scripts/README.md)
 
-### `thinkorswim scripts`
-Separate scripts related to thinkorswim studies and trading platform workflows.
+Repository maintenance and helper scripts.
+
+### [`thinkorswim scripts/`](<thinkorswim scripts/README.md>)
+
+Standalone thinkScript studies and platform-specific utilities.
 
 ## Supporting Files
 
-- `pyproject.toml`: Python package configuration for the current codebase
+- `pyproject.toml`: Python package configuration
 - `.env`: local environment variables and secrets
-- `gics_structure.csv`: classification data for sectors, industries, and sub-industries
-- `Project_structure.txt`: older raw structure notes
-- `TODOS`: project notes and unfinished work
+- `gics_structure.csv`: GICS classification source data
+- `TODOS.md`: current project notes and follow-up work
 
-## Current Direction
+## Working Model
 
-The repo currently contains both:
-- the existing research workspace
-- the early scaffold for the application platform
+The current migration path looks like this:
 
-The migration path is expected to look like this:
-1. keep exploratory work in notebooks
-2. move reusable logic into shared Python modules
-3. expose that logic through `FastAPI`
-4. build product screens in `React`
-5. package the desktop experience with `Electron`
+1. keep exploratory sequencing and one-off analysis in notebooks
+2. move reused computation into `Quantapp/analytics` and `Quantapp/data`
+3. move reused figure builders into `Quantapp/visualization`
+4. assemble stable reusable flows in `Quantapp/workflows`
+5. expose those flows through application surfaces in `apps/`
 
 ## Purpose
 
-The purpose of this project is to support investment research and portfolio analysis while gradually becoming a full desktop application built around `Electron`, `React`, `FastAPI`, and `PostgreSQL`.
+The goal of this repository is to support investment research and portfolio analysis while steadily evolving into a more durable application platform built on shared Python logic and dedicated runtime surfaces.
