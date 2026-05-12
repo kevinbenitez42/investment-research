@@ -8,26 +8,11 @@ import numpy as np
 import pandas as pd
 
 from .close_analytics import _calculate_excess_returns
+from .series_utils import coerce_close_series
 
 
 class MomentumAnalytics:
     """Helpers to compute momentum spreads and momentum z-score series."""
-
-    @staticmethod
-    def _coerce_close_series(close_series) -> pd.Series:
-        if isinstance(close_series, pd.Series):
-            series = close_series
-        elif isinstance(close_series, pd.DataFrame):
-            if "Close" not in close_series.columns:
-                raise ValueError("DataFrame input must contain a 'Close' column.")
-            series = close_series["Close"]
-        else:
-            raise TypeError("close_series must be a pandas Series or DataFrame with 'Close'.")
-
-        series = series.dropna()
-        if series.empty:
-            raise ValueError("close_series is empty after dropping NaNs.")
-        return series.sort_index()
 
     def average_return(self, close_series, window: int, percent: bool = True) -> pd.Series:
         """Alias for average-return computation without the legacy `compute_` prefix."""
@@ -35,7 +20,7 @@ class MomentumAnalytics:
 
     def compute_average_return(self, close_series, window: int, percent: bool = True) -> pd.Series:
         """Compute rolling average return over `window` observations."""
-        close = self._coerce_close_series(close_series)
+        close = coerce_close_series(close_series)
         returns = close.pct_change()
         avg_return = returns.rolling(window=int(window)).mean()
         if percent:
@@ -149,7 +134,7 @@ class MomentumAnalytics:
         annualization_factor: int = 252,
     ) -> pd.DataFrame:
         """Compute rolling Sharpe values for each window and the optimal window by date."""
-        close = self._coerce_close_series(close_series)
+        close = coerce_close_series(close_series)
         returns = close.pct_change()
         excess_returns = _calculate_excess_returns(
             returns,
@@ -226,7 +211,7 @@ class MomentumAnalytics:
                 "surface_years": int,
             }
         """
-        close = self._coerce_close_series(close_series)
+        close = coerce_close_series(close_series)
         window_sizes = self._normalize_windows(window_sizes)
         highlight_windows = self._normalize_windows(highlight_windows)
         surface_years = int(surface_years)

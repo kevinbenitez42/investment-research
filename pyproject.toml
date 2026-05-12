@@ -32,7 +32,9 @@ dashboard = [
     "dash",
 ]
 data = [
+    "databento",
     "investpy",
+    "keyring",
     "nasdaq-data-link",
     "pandas-datareader",
 ]

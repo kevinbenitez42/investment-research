@@ -7,6 +7,59 @@ import pandas as pd
 from scipy.stats import kurtosis, skew
 
 
+def coerce_close_series(data, argument_name: str = "close_series") -> pd.Series:
+    """Return a clean close-price Series from a Series or OHLC DataFrame."""
+    if isinstance(data, pd.Series):
+        close = data
+    elif isinstance(data, pd.DataFrame):
+        if "Close" not in data.columns:
+            if argument_name == "close_series":
+                raise ValueError("DataFrame input must contain a 'Close' column.")
+            raise ValueError(f"{argument_name} DataFrame must contain a 'Close' column.")
+        close = data["Close"]
+    else:
+        if argument_name == "close_series":
+            raise TypeError("close_series must be a pandas Series or DataFrame with 'Close'.")
+        raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
+
+    close = close.dropna()
+    if close.empty:
+        raise ValueError(f"{argument_name} is empty after dropping NaNs.")
+    return close.sort_index()
+
+
+def coerce_series(data, argument_name: str = "series", preferred_column: str | None = None) -> pd.Series:
+    """Coerce Series-like input to a Series, allowing one-column DataFrames."""
+    if isinstance(data, pd.Series):
+        return data
+
+    if isinstance(data, pd.DataFrame):
+        if preferred_column is not None and preferred_column in data.columns:
+            out = data[preferred_column]
+            if isinstance(out, pd.DataFrame):
+                return out.iloc[:, 0]
+            return out
+
+        if data.shape[1] == 1:
+            return data.iloc[:, 0]
+
+        raise TypeError(
+            f"{argument_name} must be a Series or single-column DataFrame. "
+            f"Received DataFrame with columns: {list(data.columns)}"
+        )
+
+    raise TypeError(f"{argument_name} must be a pandas Series.")
+
+
+def coerce_datetime_index(data):
+    """Return a copy with a naive, sorted DatetimeIndex."""
+    out = data.copy()
+    out.index = pd.to_datetime(out.index)
+    if getattr(out.index, "tz", None) is not None:
+        out.index = out.index.tz_localize(None)
+    return out.sort_index()
+
+
 def calculate_zscore(series: pd.Series) -> pd.Series:
     """Calculate z-score with safe handling for zero/NaN standard deviation."""
     std = series.std()

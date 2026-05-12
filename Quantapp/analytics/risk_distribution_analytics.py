@@ -5,27 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .series_utils import calculate_historical_var_metrics, calculate_window_metrics
+from .series_utils import coerce_close_series, calculate_historical_var_metrics, calculate_window_metrics
 
 
 class RiskDistributionAnalytics:
     """Prepare rolling drawdown/skew/kurtosis/gini metric sets for visualization."""
-
-    @staticmethod
-    def _coerce_close_series(data) -> pd.Series:
-        if isinstance(data, pd.Series):
-            close = data
-        elif isinstance(data, pd.DataFrame):
-            if "Close" not in data.columns:
-                raise ValueError("DataFrame input must contain a 'Close' column.")
-            close = data["Close"]
-        else:
-            raise TypeError("close_series must be a pandas Series or DataFrame with 'Close'.")
-
-        close = close.dropna().sort_index()
-        if close.empty:
-            raise ValueError("close_series is empty after dropping NaN values.")
-        return close
 
     @staticmethod
     def _coerce_ohlc_frame(data) -> pd.DataFrame:
@@ -181,7 +165,7 @@ class RiskDistributionAnalytics:
                 "metrics_by_window": dict[int, dict[str, pd.Series]],
             }
         """
-        close = self._coerce_close_series(close_series)
+        close = coerce_close_series(close_series)
         window_options = self._normalize_windows(windows)
         default_window = self._select_default_window(window_options, default_window=default_window)
 
@@ -225,7 +209,7 @@ class RiskDistributionAnalytics:
                 "position_value": float | None,
             }
         """
-        close = self._coerce_close_series(close_series)
+        close = coerce_close_series(close_series)
         window_options = self._normalize_windows(windows)
         default_window = self._select_default_window(window_options, default_window=default_window)
         confidence_levels = self._normalize_confidence_levels(confidence_levels)

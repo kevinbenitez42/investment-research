@@ -1,11 +1,14 @@
 import os
-from io import StringIO
 
 import pandas as pd
-import requests
-import yfinance as yf
 
 from Quantapp.data.company_data_client import CompanyDataClient
+from Quantapp.data.sources.wikipedia import (
+    WIKIPEDIA_GICS_STRUCTURE_URL,
+    WIKIPEDIA_SP_MARKET_CAP_INDEX_URLS,
+    fetch_wikipedia_tables,
+)
+from Quantapp.data.sources.yfinance_history import Tickers
 
 
 def _project_root():
@@ -41,22 +44,7 @@ class GICSDataClient:
         return pd.read_csv(self._gics_structure_path())
     
     def get_latest_gics_structure(self):
-        url = "https://en.wikipedia.org/wiki/Global_Industry_Classification_Standard"
-
-        # Spoof browser headers to avoid 403
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-        }
-
-        # Fetch the page
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-
-        html = response.text
-
-        # Parse tables from HTML
-        tables = pd.read_html(StringIO(html))
+        tables = fetch_wikipedia_tables(WIKIPEDIA_GICS_STRUCTURE_URL)
         gics_table = tables[0]  # the first table contains the GICS structure
 
         # Set column names for the GICS table
@@ -80,29 +68,10 @@ class GICSDataClient:
     
     # Retrieve all companies from S&P 500, S&P 400, S&P 600 with their GICS codes and capitalization
     def retrieve_companies(self):
-        # URLs for the market data
-        sp500_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        sp400_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_400_companies'
-        sp600_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_600_companies'
-        
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        sp500_response = requests.get(sp500_url, headers=headers)
-        sp400_response = requests.get(sp400_url, headers=headers)
-        sp600_response = requests.get(sp600_url, headers=headers)
-        sp500_response.raise_for_status()
-        sp400_response.raise_for_status()
-        sp600_response.raise_for_status()
-        
-        
-        # Retrieve S&P 500 data KEEP THIS THIS SHIFT THIS SHIT ARROUND TOO MUCH
-        #--------------------------------------------------------------------------------------------
-        #sp500_table = pd.read_html(response.text)[0] 
-        
-        sp500_table = pd.read_html(StringIO(sp500_response.text))[0] 
-        sp400_table = pd.read_html(StringIO(sp400_response.text))[0]
-        sp600_table = pd.read_html(StringIO(sp600_response.text))[0]
-        
-        #--------------------------------------------------------------------------------------------
+        sp500_table = fetch_wikipedia_tables(WIKIPEDIA_SP_MARKET_CAP_INDEX_URLS["Large Cap"])[0]
+        sp400_table = fetch_wikipedia_tables(WIKIPEDIA_SP_MARKET_CAP_INDEX_URLS["Mid Cap"])[0]
+        sp600_table = fetch_wikipedia_tables(WIKIPEDIA_SP_MARKET_CAP_INDEX_URLS["Small Cap"])[0]
+
         sp500_table = sp500_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
         sp500_table = sp500_table.rename(columns={'GICS Sector': 'Sector', 'GICS Sub-Industry': 'Sub-Industry'})
         
@@ -367,7 +336,7 @@ class GICSDataClient:
         tickers = filtered_companies['Symbol'].tolist()
         
         # Fetch price data for the filtered tickers
-        price_data = yf.Tickers(tickers).history(period=period, interval=interval)[price_field]
+        price_data = Tickers(tickers).history(period=period, interval=interval)[price_field]
         
         #make sure captialization is filtered properly
         # Filter columns to include only the tickers in the filtered_companies

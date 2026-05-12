@@ -2,11 +2,12 @@ import json
 import os
 
 import pandas as pd
-import yfinance as yf
 try:
     from quickfs import QuickFS
 except ImportError:
     QuickFS = None
+
+from Quantapp.data.sources.yfinance_history import Ticker
 
 class CompanyDataClient:
    
@@ -57,7 +58,7 @@ class CompanyDataClient:
         Returns:
             str: The most recent earnings date in 'YYYY-MM-DD' format or None if no dates found.
         """
-        earnings_dates = yf.Ticker(self.ticker_str).earnings_dates.dropna().index
+        earnings_dates = Ticker(self.ticker_str).earnings_dates.dropna().index
         if len(earnings_dates) > 0:
             last_earnings_date = str(earnings_dates[0].strftime('%Y-%m-%d'))
             return last_earnings_date

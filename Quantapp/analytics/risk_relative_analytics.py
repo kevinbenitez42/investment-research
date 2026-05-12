@@ -9,27 +9,11 @@ import pandas as pd
 
 from .close_analytics import _calculate_excess_returns
 from .rolling import _rolling_sortino_ratio_frame
-from .series_utils import calculate_zscore
+from .series_utils import calculate_zscore, coerce_close_series
 
 
 class RiskRelativeAnalytics:
     """Compute Sharpe/Sortino maps, spreads, and benchmark-relative metrics."""
-
-    @staticmethod
-    def _coerce_close_series(data, argument_name: str = "asset_close") -> pd.Series:
-        if isinstance(data, pd.Series):
-            close = data
-        elif isinstance(data, pd.DataFrame):
-            if "Close" not in data.columns:
-                raise ValueError(f"{argument_name} DataFrame must contain a 'Close' column.")
-            close = data["Close"]
-        else:
-            raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
-
-        close = close.dropna()
-        if close.empty:
-            raise ValueError(f"{argument_name} is empty after dropping NaNs.")
-        return close.sort_index()
 
     @staticmethod
     def _coerce_close_frame(data, argument_name: str = "asset_close") -> pd.DataFrame:
@@ -58,6 +42,57 @@ class RiskRelativeAnalytics:
                 raise ValueError(f"Invalid window '{window}' for term '{term}'.")
             normalized[str(term)] = win
         return normalized
+
+    @staticmethod
+    def _coerce_selected_time_frame(selected_time_frame) -> list[int]:
+        if not isinstance(selected_time_frame, list):
+            raise TypeError(
+                "selected_time_frame must be a list of positive integer windows."
+            )
+
+        windows = []
+        for window in selected_time_frame:
+            win = int(window)
+            if win <= 0:
+                raise ValueError("selected_time_frame must contain positive integer windows.")
+            windows.append(win)
+
+        if not windows:
+            raise ValueError("selected_time_frame must contain at least one window.")
+
+        return sorted(dict.fromkeys(windows))
+
+    @classmethod
+    def _build_selected_time_frame_map(
+        cls,
+        selected_time_frame,
+        base_time_frame_map,
+    ) -> dict[str, int]:
+        selected_windows = cls._coerce_selected_time_frame(selected_time_frame)
+        base_map = cls._coerce_time_frame_map(base_time_frame_map)
+        selected_map = {}
+
+        for window in selected_windows:
+            term_key = next(
+                (
+                    term
+                    for term, mapped_window in base_map.items()
+                    if mapped_window == window
+                ),
+                f"selected_{window}",
+            )
+            selected_map[term_key] = window
+
+        return selected_map
+
+    @staticmethod
+    def _term_config_map_for_time_frames(term_config_map, time_frame_map):
+        selected_term_config_map = {}
+        for window in time_frame_map.values():
+            label = f"{window}-day"
+            if label in term_config_map:
+                selected_term_config_map[label] = term_config_map[label]
+        return selected_term_config_map
 
     @staticmethod
     def _extract_ratio_series(ratio_df: pd.DataFrame, ratio_type: str, window: int) -> pd.Series:
@@ -173,7 +208,7 @@ class RiskRelativeAnalytics:
         annualization_factor: int = 252,
     ) -> dict[str, dict[str, pd.Series]]:
         """Compute rolling excess-return, volatility, and Sharpe components keyed by term."""
-        close = self._coerce_close_series(asset_close, argument_name="asset_close")
+        close = coerce_close_series(asset_close, argument_name="asset_close")
         tf_map = self._coerce_time_frame_map(time_frame_map)
         return {
             term: self._rolling_risk_components(
@@ -204,7 +239,7 @@ class RiskRelativeAnalytics:
         risk_free_rate=0.0,
     ) -> dict[str, pd.Series]:
         """Compute one risk-adjusted ratio series per term/window."""
-        close = self._coerce_close_series(asset_close, argument_name="asset_close")
+        close = coerce_close_series(asset_close, argument_name="asset_close")
         tf_map = self._coerce_time_frame_map(time_frame_map)
 
         ratio_map = {}
@@ -284,7 +319,7 @@ class RiskRelativeAnalytics:
         risk_free_rate=0.0,
     ):
         """Compute benchmark Sharpe, relative returns spread, and Sharpe spread by term."""
-        close = self._coerce_close_series(asset_close, argument_name="asset_close")
+        close = coerce_close_series(asset_close, argument_name="asset_close")
         tf_map = self._coerce_time_frame_map(time_frame_map)
 
         if not benchmark_data:
@@ -292,7 +327,7 @@ class RiskRelativeAnalytics:
 
         metrics = {}
         for symbol, benchmark_frame in benchmark_data.items():
-            benchmark_close = self._coerce_close_series(benchmark_frame, argument_name=f"benchmark_data[{symbol}]")
+            benchmark_close = coerce_close_series(benchmark_frame, argument_name=f"benchmark_data[{symbol}]")
             metrics[symbol] = {}
 
             for term, window in tf_map.items():
@@ -463,9 +498,18 @@ class RiskRelativeAnalytics:
         time_frame_map,
         benchmark_data=None,
         risk_free_rate=0.0,
+        selected_time_frame=None,
     ):
         """Return all Sharpe/Sortino maps and benchmark-relative artifacts in one payload."""
-        tf_map = self._coerce_time_frame_map(time_frame_map)
+        base_tf_map = self._coerce_time_frame_map(time_frame_map)
+        if selected_time_frame is None:
+            tf_map = base_tf_map
+            selected_tf_map = dict(base_tf_map)
+        else:
+            selected_tf_map = self._build_selected_time_frame_map(selected_time_frame, base_tf_map)
+            tf_map = dict(base_tf_map)
+            tf_map.update(selected_tf_map)
+
         asset_sharpe_map, asset_sortino_map = self.compute_asset_ratio_maps(
             analytics=analytics,
             asset_close=asset_close,
@@ -491,8 +535,20 @@ class RiskRelativeAnalytics:
             term: {symbol: benchmark_metrics[symbol][term]["sharpe_spread"] for symbol in benchmark_order}
             for term in tf_map
         }
+        term_config_map = self.build_term_config_map(
+            asset_sharpe_map,
+            asset_sortino_map,
+            tf_map,
+            asset_sortino_sharpe_spread_map=sortino_sharpe_spread_map,
+        )
+        selected_term_config_map = self._term_config_map_for_time_frames(
+            term_config_map,
+            selected_tf_map,
+        )
 
         return {
+            "time_frame_map": tf_map,
+            "selected_time_frame_map": selected_tf_map,
             "asset_sharpe_map": asset_sharpe_map,
             "asset_component_map": asset_component_map,
             "asset_sortino_map": asset_sortino_map,
@@ -502,12 +558,8 @@ class RiskRelativeAnalytics:
             "benchmark_order": benchmark_order,
             "default_benchmark": benchmark_order[0] if benchmark_order else None,
             "spread_plot_data": spread_plot_data,
-            "term_config_map": self.build_term_config_map(
-                asset_sharpe_map,
-                asset_sortino_map,
-                tf_map,
-                asset_sortino_sharpe_spread_map=sortino_sharpe_spread_map,
-            ),
+            "term_config_map": term_config_map,
+            "selected_term_config_map": selected_term_config_map,
         }
 
     def build_benchmark_plot_payload(
@@ -517,6 +569,7 @@ class RiskRelativeAnalytics:
         spread_plot_data,
         time_frame_map,
         asset_component_map=None,
+        selected_time_frame=None,
     ):
         """
         Prepare z-scored benchmark comparison payload for plotting.
@@ -533,7 +586,12 @@ class RiskRelativeAnalytics:
                 "detail_zscore_map": {symbol: {term: {"asset","benchmark","asset_sharpe","benchmark_sharpe", ...}}},
             }
         """
-        tf_map = self._coerce_time_frame_map(time_frame_map)
+        base_tf_map = self._coerce_time_frame_map(time_frame_map)
+        tf_map = (
+            self._build_selected_time_frame_map(selected_time_frame, base_tf_map)
+            if selected_time_frame is not None
+            else base_tf_map
+        )
         term_order = list(tf_map.keys())
         benchmark_order = list(benchmark_metrics.keys())
         asset_component_map = asset_component_map or {}
@@ -584,6 +642,7 @@ class RiskRelativeAnalytics:
                 }
 
         return {
+            "time_frame_map": tf_map,
             "term_order": term_order,
             "benchmark_order": benchmark_order,
             "default_benchmark": benchmark_order[0] if benchmark_order else None,

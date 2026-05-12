@@ -39,7 +39,7 @@ This package contains shared Plotly-based visualization code.
 - `plotter.py`
   Older general-purpose figure builder namespace.
 
-- `line_chart_plotter.py`, `bar_chart_plotter.py`, `candlestick_plotter.py`, `heatmap_plotter.py`, `pie_chart_plotter.py`
+- `bar_chart_plotter.py`, `heatmap_plotter.py`, `pie_chart_plotter.py`
   Legacy plot-type-oriented modules that remain in place while notebooks are migrated.
   These can continue to serve as compatibility wrappers, but new extractions should prefer `traces/` plus `views/`.
 

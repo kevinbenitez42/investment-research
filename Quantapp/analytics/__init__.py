@@ -1,15 +1,12 @@
 """Analytics and computation helpers."""
 
 try:
-    from .algorithm import Algorithm
+    from .metric import Algorithm, Metric
 except ModuleNotFoundError:  # Optional dependency path, e.g. investpy not installed.
     Algorithm = None
+    Metric = None
 from .close_analytics import CloseAnalytics
-from .cross_section_stats import CrossSectionStats
-from .feature_engineering import FeatureEngineering
 from .helper import Helper
-from .market_data_utils import MarketDataUtils
-from .models import Models
 from .momentum_analytics import MomentumAnalytics
 from .risk_relative_analytics import RiskRelativeAnalytics
 from .risk_distribution_analytics import RiskDistributionAnalytics
@@ -25,28 +22,19 @@ from .series_utils import (
     gini_coefficient,
     zscore,
 )
-from .signal_labels import SignalLabels
-from .sequence_generator import SequenceGenerator
-from .time_features import TimeFeatures
 
 __all__ = [
     "Helper",
-    "MarketDataUtils",
     "CloseAnalytics",
     "OHLCAnalytics",
     "Rolling",
     "TimeSeriesAnalytics",
-    "TimeFeatures",
-    "FeatureEngineering",
-    "CrossSectionStats",
     "MomentumAnalytics",
     "RiskRelativeAnalytics",
     "RiskDistributionAnalytics",
-    "SignalLabels",
     "SeriesTransforms",
-    "SequenceGenerator",
     "Algorithm",
-    "Models",
+    "Metric",
     "calculate_zscore",
     "zscore",
     "calculate_historical_var_metrics",

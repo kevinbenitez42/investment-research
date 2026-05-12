@@ -5,21 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
-def find_project_root(start_path: str | os.PathLike[str] | None = None) -> Path:
-    """Return the nearest parent directory that looks like the project root."""
-    current = Path(start_path or Path.cwd()).resolve()
-    candidates = [current, *current.parents]
-    package_root = Path(__file__).resolve().parents[1]
-
-    if package_root not in candidates:
-        candidates.append(package_root)
-
-    for candidate in candidates:
-        if (candidate / "pyproject.toml").exists() or (candidate / ".git").exists():
-            return candidate
-
-    return package_root
+from .project import find_project_root
 
 
 def load_project_env(
