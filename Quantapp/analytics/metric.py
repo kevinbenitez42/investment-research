@@ -33,6 +33,37 @@ class Metric:
         if highest_close == 0:
             return np.nan
         return 100 * (highest_close - close.iloc[-1]) / highest_close
+
+    def textbook_window_drawdown(self, arr):
+        """Return the worst peak-to-trough drawdown inside one price window."""
+        values = np.asarray(arr, dtype=float)
+        if values.size == 0 or np.isnan(values).all():
+            return np.nan
+
+        peaks = np.maximum.accumulate(values)
+        drawdowns = values / peaks - 1.0
+        return np.nanmin(drawdowns)
+
+    def window_recovery_time(self, arr):
+        """Return sessions from trough to recovered high inside one price window."""
+        values = np.asarray(arr, dtype=float)
+        values = values[~np.isnan(values)]
+        if values.size == 0:
+            return np.nan
+
+        peaks = np.maximum.accumulate(values)
+        drawdowns = values / peaks - 1.0
+        trough_idx = int(np.nanargmin(drawdowns))
+        if trough_idx >= values.size - 1:
+            return np.nan
+
+        peak_at_trough = peaks[trough_idx]
+        recovery_candidates = np.flatnonzero(values[trough_idx + 1:] >= peak_at_trough)
+        if recovery_candidates.size == 0:
+            return np.nan
+
+        recovery_idx = trough_idx + 1 + int(recovery_candidates[0])
+        return float(recovery_idx - trough_idx)
     
     def log_returns(self, arr):
         returns = np.log(arr / arr.shift()).dropna()
@@ -588,7 +619,6 @@ class Metric:
         return arr_return - (beta * benchmark_return)
 
     def sharpe(self, arr, risk_free_rate):
-        R_f = risk_free_rate[0]
         portfolio_return = (arr.iloc[-1] - arr.iloc[0]) / np.abs(arr.iloc[0])
         portfolio_std = np.log(arr / arr.shift()).dropna().std()
         return ((portfolio_return) / portfolio_std) * np.sqrt(len(arr) / 252)

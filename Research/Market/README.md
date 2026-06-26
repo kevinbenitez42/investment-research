@@ -2,9 +2,6 @@
 
 This notebook group focuses on broader market structure and cross-sectional research.
 
-Current areas:
+This folder contains market and sector notebooks by asset class or industry grouping.
 
-- `Asset Classes/`: market and sector notebooks by asset class or industry grouping
-- `Macroeconomics/`: macro series and broad market context notebooks
-
-Use this area for research that is wider than a single asset and not yet packaged into a reusable workflow.
+Use this area for asset-class and cross-market research that is wider than a single asset and not yet packaged into a reusable workflow.

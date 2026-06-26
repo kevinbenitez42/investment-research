@@ -88,15 +88,19 @@ def _annotation_payload(annotation):
     return copy.deepcopy(dict(annotation))
 
 
+def _format_percentile(value):
+    return "n/a" if pd.isna(value) else f"{value:.0f}th pctile"
+
+
+def _latest_or_nan(series):
+    return series.iloc[-1] if not series.empty else np.nan
+
+
 def _percentile_rank(series, value):
     cleaned = pd.Series(series).dropna()
     if cleaned.empty or pd.isna(value):
         return np.nan
     return float(cleaned.le(value).mean() * 100)
-
-
-def _format_percentile(value):
-    return "n/a" if pd.isna(value) else f"{value:.0f}th pctile"
 
 
 def _line_annotation(*, x, y, text, color, xref, yref, yshift=0):
@@ -183,36 +187,22 @@ def _constant_axis_series(value):
     return pd.Series([float(value)])
 
 
-def _rolling_recovery_time(close_series, window):
-    def recovery_window(window_values):
-        values = np.asarray(window_values, dtype=float)
-        values = values[~np.isnan(values)]
-        if values.size == 0:
-            return np.nan
+def _coerce_metric_series(window_metrics, key, window):
+    if key not in window_metrics:
+        raise ValueError(f"drawdown_recovery_by_window[{window!r}] is missing required key {key!r}.")
 
-        peaks = np.maximum.accumulate(values)
-        drawdowns = values / peaks - 1.0
-        trough_idx = int(np.nanargmin(drawdowns))
-        if trough_idx >= values.size - 1:
-            return np.nan
-
-        peak_at_trough = peaks[trough_idx]
-        recovery_candidates = np.flatnonzero(values[trough_idx + 1:] >= peak_at_trough)
-        if recovery_candidates.size == 0:
-            return np.nan
-
-        recovery_idx = trough_idx + 1 + int(recovery_candidates[0])
-        return float(recovery_idx - trough_idx)
-
-    return close_series.rolling(window=window).apply(recovery_window, raw=True).dropna()
+    series = window_metrics[key]
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series)
+    return series.dropna().sort_index()
 
 
 def plot_candlestick_drawdown_recovery_view(
     price_frame,
-    metrics_by_window,
+    drawdown_recovery_by_window,
     window_options=None,
     default_window=None,
-    show_window_menu=True,
+    show_window_menu=None,
     ticker_label="Asset",
     title=None,
     candlestick_period=None,
@@ -225,8 +215,8 @@ def plot_candlestick_drawdown_recovery_view(
     """Plot a stacked candlestick, drawdown, and recovery profile with linked zoom."""
     if "Close" not in price_frame.columns:
         raise ValueError("price_frame must contain a 'Close' column.")
-    if not isinstance(metrics_by_window, Mapping) or not metrics_by_window:
-        raise ValueError("metrics_by_window must be a non-empty mapping of window -> metric map.")
+    if not isinstance(drawdown_recovery_by_window, Mapping) or not drawdown_recovery_by_window:
+        raise ValueError("drawdown_recovery_by_window must be a non-empty mapping of window -> metric map.")
 
     plot_data = price_frame.copy()
     if not isinstance(plot_data.index, pd.DatetimeIndex):
@@ -236,16 +226,19 @@ def plot_candlestick_drawdown_recovery_view(
         raise ValueError("No non-null close data available for plotting.")
 
     if window_options is None:
-        window_options = list(metrics_by_window.keys())
+        window_options = list(drawdown_recovery_by_window.keys())
     else:
         try:
             window_options = [int(window) for window in window_options]
         except Exception as exc:
             raise ValueError("window_options must be iterable integers.") from exc
-        window_options = [window for window in window_options if window in metrics_by_window]
+        window_options = [window for window in window_options if window in drawdown_recovery_by_window]
 
     if not window_options:
         raise ValueError("No valid window options available for plotting.")
+
+    if show_window_menu is None:
+        show_window_menu = len(window_options) > 1
 
     if default_window not in window_options:
         default_window = _preferred_numeric_window(window_options) or window_options[0]
@@ -360,12 +353,10 @@ def plot_candlestick_drawdown_recovery_view(
     lower_panel_trace_indices = []
 
     for window in window_options:
-        rolling_peak = plot_data["Close"].rolling(window=window, min_periods=1).max()
-        underwater_series = plot_data["Close"].div(rolling_peak).sub(1.0).dropna()
-        drawdown_series = (
-            metrics_by_window.get(window, {}).get("max_drawdown", pd.Series(dtype=float)).dropna()
-        )
-        recovery_series = _rolling_recovery_time(plot_data["Close"], window)
+        window_metrics = drawdown_recovery_by_window[window]
+        underwater_series = _coerce_metric_series(window_metrics, "underwater", window)
+        drawdown_series = _coerce_metric_series(window_metrics, "max_drawdown", window)
+        recovery_series = _coerce_metric_series(window_metrics, "recovery_time", window)
 
         shared_index = underwater_series.index.intersection(drawdown_series.index)
         visible_underwater = underwater_series.reindex(shared_index).dropna()
@@ -384,10 +375,9 @@ def plot_candlestick_drawdown_recovery_view(
         drawdown_percentile_map[window] = drawdown_p05
         recovery_percentile_map[window] = recovery_p95
 
-        underwater_current = underwater_series.iloc[-1] if not underwater_series.empty else np.nan
-        drawdown_current = drawdown_series.iloc[-1] if not drawdown_series.empty else np.nan
-        recovery_current = recovery_series.iloc[-1] if not recovery_series.empty else np.nan
-
+        underwater_current = _latest_or_nan(underwater_series)
+        drawdown_current = _latest_or_nan(drawdown_series)
+        recovery_current = _latest_or_nan(recovery_series)
         underwater_rank = _percentile_rank(underwater_series, underwater_current)
         drawdown_rank = _percentile_rank(drawdown_series, drawdown_current)
         recovery_rank = _percentile_rank(recovery_series, recovery_current)

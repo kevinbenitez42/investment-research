@@ -6,7 +6,10 @@ from .allocation import (
 )
 from .dte_ladder import plot_options_expiration_ladder
 from .option_expiration_pl import (
+    build_asset_option_expiration_pl_dte_selector_figure,
     build_option_expiration_pl_figure,
+    build_option_max_loss_by_underlying_figure,
+    build_option_profit_loss_extremes_table,
     display_option_expiration_pl_view,
 )
 from .relative_strength import (
@@ -22,7 +25,10 @@ from .summary import (
 )
 
 __all__ = [
+    "build_asset_option_expiration_pl_dte_selector_figure",
     "build_option_expiration_pl_figure",
+    "build_option_max_loss_by_underlying_figure",
+    "build_option_profit_loss_extremes_table",
     "display_option_expiration_pl_view",
     "format_snapshot_map",
     "plot_benchmark_snapshot_zscores",

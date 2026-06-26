@@ -6,6 +6,8 @@ from importlib import import_module
 
 import pandas as pd
 
+from .rolling_optimizations import get_rolling_windows_optimization
+
 
 def _validate_metric(metric):
     if not callable(metric):
@@ -17,6 +19,22 @@ def _validate_window(window: int) -> int:
     if window <= 0:
         raise ValueError("window must be a positive integer.")
     return window
+
+
+def _normalize_windows(windows) -> list[int]:
+    if isinstance(windows, (str, bytes)):
+        raise TypeError("windows must be an integer or an iterable of integers.")
+
+    try:
+        windows_iter = list(windows)
+    except TypeError:
+        windows_iter = [windows]
+
+    if not windows_iter:
+        raise ValueError("windows must contain at least one positive integer.")
+
+    normalized = [_validate_window(window) for window in windows_iter]
+    return list(dict.fromkeys(normalized))
 
 
 def _normalize_min_periods(min_periods: int | None, window: int) -> int:
@@ -42,6 +60,21 @@ def _resolve_asset_level(columns: pd.Index, asset_level: str | int) -> str | int
         raise ValueError(f"asset_level {asset_level!r} was not found in column level names.")
 
     return asset_level
+
+
+_PANDAS_ROLLING_REDUCERS = {
+    "average": "mean",
+    "count": "count",
+    "kurt": "kurt",
+    "max": "max",
+    "mean": "mean",
+    "median": "median",
+    "min": "min",
+    "skew": "skew",
+    "std": "std",
+    "sum": "sum",
+    "var": "var",
+}
 
 
 def latest(data, metric, *args, dropna: bool = True, **kwargs):
@@ -124,6 +157,66 @@ def rolling(data, metric, window: int, *args, min_periods: int | None = None, dr
         )
 
     raise TypeError("data must be a pandas Series or DataFrame.")
+
+
+def rolling_windows(data, metric, windows, *args, min_periods: int | None = None, dropna: bool = True, **kwargs):
+    """
+    Apply a scalar metric over multiple rolling windows.
+
+    Series input returns a DataFrame with one column per window. DataFrame input
+    returns a DataFrame with MultiIndex columns shaped as (window, original_column).
+    Common pandas reducers use vectorized rolling paths; unsupported metrics fall
+    back to ``rolling``.
+    """
+    if not isinstance(data, (pd.Series, pd.DataFrame)):
+        raise TypeError("data must be a pandas Series or DataFrame.")
+
+    normalized_windows = _normalize_windows(windows)
+    metric_name = metric.strip().lower() if isinstance(metric, str) else getattr(metric, "__name__", None)
+    reducer_name = _PANDAS_ROLLING_REDUCERS.get(str(metric_name).strip().lower()) if metric_name else None
+
+    if reducer_name is None:
+        if isinstance(metric, str):
+            supported_text = ", ".join(sorted(_PANDAS_ROLLING_REDUCERS))
+            raise ValueError(f"Unsupported rolling metric string {metric!r}. Supported metrics: {supported_text}.")
+        _validate_metric(metric)
+        optimized = get_rolling_windows_optimization(metric)
+        if optimized is not None:
+            result = optimized(
+                data,
+                normalized_windows,
+                *args,
+                min_periods=min_periods,
+                dropna=dropna,
+                **kwargs,
+            )
+            if result is not None:
+                return result
+
+    results = {}
+    for window in normalized_windows:
+        window_min_periods = _normalize_min_periods(min_periods, window)
+
+        if reducer_name is None:
+            result = rolling(
+                data,
+                metric,
+                window,
+                *args,
+                min_periods=window_min_periods,
+                dropna=dropna,
+                **kwargs,
+            )
+        else:
+            rolling_object = data.rolling(window=window, min_periods=window_min_periods)
+            result = getattr(rolling_object, reducer_name)(*args, **kwargs)
+
+        results[window] = result
+
+    if isinstance(data, pd.Series):
+        return pd.DataFrame(results, index=data.index)
+
+    return pd.concat(results, axis=1, names=["window"])
 
 
 def rolling_frame(data, metric, window: int, *args, min_periods: int | None = None, dropna: bool = True, **kwargs):
@@ -228,14 +321,7 @@ def rolling_by_asset(
 _LAZY_EXPORTS = {
     "Algorithm": ("Quantapp.analytics.metric", "Algorithm"),
     "Metric": ("Quantapp.analytics.metric", "Metric"),
-    "CloseAnalytics": ("Quantapp.analytics.close_analytics", "CloseAnalytics"),
     "Helper": ("Quantapp.analytics.helper", "Helper"),
-    "MomentumAnalytics": ("Quantapp.analytics.momentum_analytics", "MomentumAnalytics"),
-    "RiskRelativeAnalytics": ("Quantapp.analytics.risk_relative_analytics", "RiskRelativeAnalytics"),
-    "RiskDistributionAnalytics": ("Quantapp.analytics.risk_distribution_analytics", "RiskDistributionAnalytics"),
-    "OHLCAnalytics": ("Quantapp.analytics.ohlc_analytics", "OHLCAnalytics"),
-    "Rolling": ("Quantapp.analytics.rolling", "Rolling"),
-    "TimeSeriesAnalytics": ("Quantapp.analytics.rolling", "TimeSeriesAnalytics"),
     "SeriesTransforms": ("Quantapp.analytics.series_transforms", "SeriesTransforms"),
 }
 
@@ -256,16 +342,10 @@ __all__ = [
     "latest_frame",
     "latest_by_asset",
     "rolling",
+    "rolling_windows",
     "rolling_frame",
     "rolling_by_asset",
     "Helper",
-    "CloseAnalytics",
-    "OHLCAnalytics",
-    "Rolling",
-    "TimeSeriesAnalytics",
-    "MomentumAnalytics",
-    "RiskRelativeAnalytics",
-    "RiskDistributionAnalytics",
     "SeriesTransforms",
     "Algorithm",
     "Metric",

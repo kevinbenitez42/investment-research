@@ -149,6 +149,26 @@ def plot_price_target_premium_discount(plot_df: pd.DataFrame, *, chart_label: st
             row=row_number,
             col=1,
         )
+
+        extrema = pd.to_numeric(trace_df[label], errors="coerce").dropna()
+        if not extrema.empty:
+            lowest_value = float(extrema.min())
+            highest_value = float(extrema.max())
+            for line_label, y_value, line_color in [
+                ("Lowest", lowest_value, "#f87171"),
+                ("Highest", highest_value, "#4ade80"),
+            ]:
+                fig.add_hline(
+                    y=y_value,
+                    line_dash="dash",
+                    line_color=line_color,
+                    opacity=0.7,
+                    annotation_text=f"{line_label}: {y_value:.2f}%",
+                    annotation_position="top right",
+                    annotation_font={"color": line_color, "size": 10},
+                    row=row_number,
+                    col=1,
+                )
         fig.update_yaxes(
             title_text=label,
             ticksuffix="%",

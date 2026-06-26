@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-def plot_options_expiration_ladder(positions_df: pd.DataFrame) -> go.Figure | None:
+def plot_options_expiration_ladder(positions_df: pd.DataFrame, *, show_summary: bool = False) -> go.Figure | None:
     if positions_df.empty:
         print("No option positions available for the DTE ladder.")
         return None
@@ -62,13 +62,14 @@ def plot_options_expiration_ladder(positions_df: pd.DataFrame) -> go.Figure | No
     sparse_hovertemplate = "Underlying: %{fullData.name}<br>Expiration: %{x}<br>Gross Contracts: %{y:.2f}<extra></extra>"
     dense_hovertemplate = "Underlying: %{fullData.name}<br>DTE: %{x}<br>Expiration(s): %{customdata}<br>Gross Contracts: %{y:.2f}<extra></extra>"
 
-    print("[DTE Ladder] Expiration Ladder Summary:")
-    print(f"- Option rows: {len(dte_view):,}")
-    print(f"- Unique underlyings: {dte_view['underlying'].nunique():,}")
-    print(f"- Expiration dates tracked: {dte_view['expiration'].nunique():,}")
-    print(f"- Nearest expiration: {dte_view['days_to_expiration'].min()} DTE")
-    print(f"- Furthest expiration: {dte_view['days_to_expiration'].max()} DTE")
-    print(f"- Gross contracts tracked: {dte_view['gross_contracts'].sum():,.2f}")
+    if show_summary:
+        print("[DTE Ladder] Expiration Ladder Summary:")
+        print(f"- Option rows: {len(dte_view):,}")
+        print(f"- Unique underlyings: {dte_view['underlying'].nunique():,}")
+        print(f"- Expiration dates tracked: {dte_view['expiration'].nunique():,}")
+        print(f"- Nearest expiration: {dte_view['days_to_expiration'].min()} DTE")
+        print(f"- Furthest expiration: {dte_view['days_to_expiration'].max()} DTE")
+        print(f"- Gross contracts tracked: {dte_view['gross_contracts'].sum():,.2f}")
 
     sparse_x_data = []
     sparse_y_data = []

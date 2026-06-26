@@ -235,6 +235,45 @@ def fetch_fmp_stock_peers(
     )
 
 
+def fetch_fmp_historical_market_capitalization(
+    symbol: str,
+    *,
+    limit: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout: int = 30,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Fetch historical FMP market capitalization rows for one symbol."""
+    params: dict[str, object] = {"symbol": normalize_fmp_symbol(symbol)}
+    if limit is not None:
+        params["limit"] = int(limit)
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
+
+    payload = fmp_request_json(
+        "historical-market-capitalization",
+        api_key=api_key,
+        base_url=base_url,
+        params=params,
+        timeout=timeout,
+        session=session,
+    )
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("historical", "data"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return rows
+        return [payload] if payload else []
+    return []
+
+
 def fetch_fmp_ratios_ttm(
     symbol: str,
     *,

@@ -21,6 +21,8 @@ REFERENCE_WINDOW_STYLE_MAP = {
     50: ("blue", "50 Days"),
     200: ("green", "200 Days"),
 }
+DEFAULT_HIGHLIGHT_WINDOWS = tuple(REFERENCE_WINDOW_STYLE_MAP)
+DEFAULT_SURFACE_YEARS = 10
 
 
 def header_margin(top=None):
@@ -190,19 +192,7 @@ def preferred_term_key(time_frame_map, term_options=None, preferred=200):
     )
 
 
-def coerce_momentum_diagnostics_context(diagnostics_context):
-    required_keys = {
-        "window_sizes",
-        "highlight_windows",
-        "sharpe_table",
-        "optimal_windows_int",
-        "mean_sharpe",
-        "median_sharpe",
-        "mean_volatility",
-        "median_volatility",
-        "sharpe_surface",
-        "surface_years",
-    }
+def _coerce_diagnostics_mapping(diagnostics_context, required_keys):
     if not isinstance(diagnostics_context, dict):
         try:
             diagnostics_context = dict(diagnostics_context)
@@ -213,7 +203,103 @@ def coerce_momentum_diagnostics_context(diagnostics_context):
     if missing:
         raise ValueError(f"diagnostics_context missing required keys: {missing}")
 
-    return diagnostics_context
+    return dict(diagnostics_context)
+
+
+def _add_sharpe_display_fields(context):
+    sharpe_table = context["sharpe_table"]
+    sharpe_only = sharpe_table.drop(columns="Optimal_Window", errors="ignore")
+    surface_years = int(context.get("surface_years", DEFAULT_SURFACE_YEARS))
+
+    if sharpe_only.empty:
+        sharpe_surface = sharpe_only
+    else:
+        last_date = sharpe_only.index[-1]
+        start_date = last_date - pd.Timedelta(days=365 * surface_years)
+        sharpe_surface = sharpe_only.loc[start_date:last_date]
+
+    context["highlight_windows"] = context.get("highlight_windows", DEFAULT_HIGHLIGHT_WINDOWS)
+    context["sharpe_only"] = sharpe_only
+    context["sharpe_surface"] = sharpe_surface
+    context["surface_years"] = surface_years
+    return context
+
+
+def coerce_sharpe_surface_context(diagnostics_context):
+    context = _coerce_diagnostics_mapping(diagnostics_context, {"sharpe_table"})
+    return _add_sharpe_display_fields(context)
+
+
+def coerce_momentum_diagnostics_context(diagnostics_context):
+    context = _coerce_diagnostics_mapping(
+        diagnostics_context,
+        {"sharpe_table", "volatility_df"},
+    )
+    context = _add_sharpe_display_fields(context)
+    sharpe_only = context["sharpe_only"]
+    optimal_windows = sharpe_only.idxmax(axis=1).dropna()
+    volatility_df = context["volatility_df"]
+    window_sizes = context.get("window_sizes", list(sharpe_only.columns))
+
+    latest_sharpe_row = sharpe_only.dropna(how="all").tail(1)
+    if latest_sharpe_row.empty:
+        current_sharpe = pd.Series(dtype=float)
+    else:
+        current_sharpe = latest_sharpe_row.iloc[0].reindex(window_sizes)
+
+    def sharpe_zscore(series):
+        clean = pd.Series(series).dropna().sort_index()
+        if clean.empty:
+            return pd.Series(dtype=float)
+        std = clean.std()
+        if std == 0 or pd.isna(std):
+            return pd.Series(0.0, index=clean.index)
+        return (clean - clean.mean()) / std
+
+    sharpe_zscore_frame = sharpe_only.apply(sharpe_zscore)
+    sharpe_zscore_mean_by_window = sharpe_zscore_frame.mean().reindex(window_sizes)
+    sharpe_zscore_std_by_window = sharpe_zscore_frame.std().reindex(window_sizes)
+    cross_window_mean = sharpe_zscore_frame.mean(axis=1)
+    cross_window_std = sharpe_zscore_frame.std(axis=1)
+    cross_window_zscore_frame = sharpe_zscore_frame.sub(cross_window_mean, axis=0).div(
+        cross_window_std.replace(0, np.nan),
+        axis=0,
+    )
+    cross_window_zscore_frame.loc[cross_window_std == 0] = 0.0
+    cross_window_zscore_mean_by_window = cross_window_zscore_frame.mean().reindex(window_sizes)
+    cross_window_zscore_std_by_window = cross_window_zscore_frame.std().reindex(window_sizes)
+
+    latest_sharpe_zscore_row = sharpe_zscore_frame.dropna(how="all").tail(1)
+    if latest_sharpe_zscore_row.empty:
+        current_sharpe_zscore = pd.Series(dtype=float)
+        current_sharpe_zscore_date = None
+        current_sharpe_cross_window_zscore = pd.Series(dtype=float)
+    else:
+        current_sharpe_zscore = latest_sharpe_zscore_row.iloc[0].reindex(window_sizes)
+        current_sharpe_zscore_date = latest_sharpe_zscore_row.index[0]
+        latest_cross_window_zscore_row = cross_window_zscore_frame.dropna(how="all").tail(1)
+        if latest_cross_window_zscore_row.empty:
+            current_sharpe_cross_window_zscore = pd.Series(dtype=float)
+        else:
+            current_sharpe_cross_window_zscore = latest_cross_window_zscore_row.iloc[0].reindex(window_sizes)
+
+    context["window_sizes"] = window_sizes
+    context["optimal_windows"] = optimal_windows
+    context["optimal_windows_int"] = optimal_windows.astype(int)
+    context["current_sharpe"] = current_sharpe
+    context["current_sharpe_zscore"] = current_sharpe_zscore
+    context["current_sharpe_zscore_date"] = current_sharpe_zscore_date
+    context["sharpe_zscore_mean_by_window"] = sharpe_zscore_mean_by_window
+    context["sharpe_zscore_std_by_window"] = sharpe_zscore_std_by_window
+    context["current_sharpe_cross_window_zscore"] = current_sharpe_cross_window_zscore
+    context["cross_window_zscore_mean_by_window"] = cross_window_zscore_mean_by_window
+    context["cross_window_zscore_std_by_window"] = cross_window_zscore_std_by_window
+    context["mean_sharpe"] = sharpe_only.mean()
+    context["median_sharpe"] = sharpe_only.median()
+    context["std_sharpe"] = sharpe_only.std()
+    context["mean_volatility"] = volatility_df.mean()
+    context["median_volatility"] = volatility_df.median()
+    return context
 
 
 def add_reference_vlines(fig: go.Figure, highlight_windows, *, row=None, col=None) -> None:

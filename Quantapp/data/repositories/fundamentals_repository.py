@@ -377,6 +377,8 @@ def get_peer_analysis_data(
     *,
     provider: str = "fmp",
     peer_limit: int = 12,
+    peer_universe_symbols: list[str] | None = None,
+    peer_source_label: str | None = None,
     manual_peer_symbols: list[str] | None = None,
     require_same_sector: bool = True,
     require_same_industry: bool = False,
@@ -388,7 +390,7 @@ def get_peer_analysis_data(
     timeout: int = 30,
     session: requests.Session | None = None,
 ) -> PeerAnalysisData:
-    """Fetch FMP peer context and valuation tables for one company."""
+    """Fetch peer context and valuation tables for one company."""
     normalized_provider = str(provider).strip().lower()
     if normalized_provider != "fmp":
         raise ValueError(f"Unsupported fundamentals provider '{provider}'.")
@@ -414,18 +416,6 @@ def get_peer_analysis_data(
     )
     target_context = company_context(symbol, quote, profile)
 
-    try:
-        peer_payload = fetch_fmp_stock_peers(
-            symbol,
-            api_key=api_key,
-            base_url=base_url,
-            timeout=timeout,
-            session=session,
-        )
-    except Exception:
-        peer_payload = []
-
-    raw_peer_symbols = extract_peer_symbols(peer_payload, target_symbol=symbol)
     manual_symbols = [
         normalize_fmp_symbol(manual_symbol)
         for manual_symbol in (manual_peer_symbols or [])
@@ -433,40 +423,76 @@ def get_peer_analysis_data(
     ]
 
     peer_context_by_symbol: dict[str, tuple[dict, dict]] = {}
-    for candidate_symbol in raw_peer_symbols:
+    if peer_universe_symbols is not None:
+        raw_peer_symbols = [
+            normalize_fmp_symbol(peer_symbol)
+            for peer_symbol in peer_universe_symbols
+            if str(peer_symbol).strip()
+        ]
+        raw_peer_symbols = [
+            peer_symbol
+            for peer_symbol in dict.fromkeys(raw_peer_symbols)
+            if peer_symbol and peer_symbol != symbol
+        ]
+        filtered_peer_symbols = raw_peer_symbols.copy()
+        peer_filter_summary = pd.DataFrame(
+            [
+                {
+                    "symbol": peer_symbol,
+                    "passesFilters": True,
+                    "note": peer_source_label or "Selected from provided peer universe.",
+                }
+                for peer_symbol in filtered_peer_symbols
+            ]
+        )
+        selection_note = peer_source_label or "Used provided peer universe; skipped FMP stock-peers discovery."
+    else:
         try:
-            candidate_quote = safe_first_record(
-                fetch_fmp_quote(
-                    candidate_symbol,
-                    api_key=api_key,
-                    base_url=base_url,
-                    timeout=timeout,
-                    session=session,
-                )
-            )
-            candidate_profile = safe_first_record(
-                fetch_fmp_profile(
-                    candidate_symbol,
-                    api_key=api_key,
-                    base_url=base_url,
-                    timeout=timeout,
-                    session=session,
-                )
+            peer_payload = fetch_fmp_stock_peers(
+                symbol,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                session=session,
             )
         except Exception:
-            candidate_quote, candidate_profile = {}, {}
-        peer_context_by_symbol[candidate_symbol] = (candidate_quote, candidate_profile)
+            peer_payload = []
 
-    filtered_peer_symbols, peer_filter_summary, selection_note = filter_peer_symbols(
-        raw_peer_symbols,
-        target_context=target_context,
-        peer_context_by_symbol=peer_context_by_symbol,
-        require_same_sector=require_same_sector,
-        require_same_industry=require_same_industry,
-        require_same_exchange=require_same_exchange,
-        market_cap_lower_multiple=market_cap_lower_multiple,
-        market_cap_upper_multiple=market_cap_upper_multiple,
-    )
+        raw_peer_symbols = extract_peer_symbols(peer_payload, target_symbol=symbol)
+        for candidate_symbol in raw_peer_symbols:
+            try:
+                candidate_quote = safe_first_record(
+                    fetch_fmp_quote(
+                        candidate_symbol,
+                        api_key=api_key,
+                        base_url=base_url,
+                        timeout=timeout,
+                        session=session,
+                    )
+                )
+                candidate_profile = safe_first_record(
+                    fetch_fmp_profile(
+                        candidate_symbol,
+                        api_key=api_key,
+                        base_url=base_url,
+                        timeout=timeout,
+                        session=session,
+                    )
+                )
+            except Exception:
+                candidate_quote, candidate_profile = {}, {}
+            peer_context_by_symbol[candidate_symbol] = (candidate_quote, candidate_profile)
+
+        filtered_peer_symbols, peer_filter_summary, selection_note = filter_peer_symbols(
+            raw_peer_symbols,
+            target_context=target_context,
+            peer_context_by_symbol=peer_context_by_symbol,
+            require_same_sector=require_same_sector,
+            require_same_industry=require_same_industry,
+            require_same_exchange=require_same_exchange,
+            market_cap_lower_multiple=market_cap_lower_multiple,
+            market_cap_upper_multiple=market_cap_upper_multiple,
+        )
 
     peer_symbols = [symbol, *manual_symbols, *filtered_peer_symbols]
     peer_symbols = [peer_symbol for peer_symbol in dict.fromkeys(peer_symbols) if peer_symbol][:peer_limit]
@@ -569,7 +595,7 @@ def get_peer_analysis_data(
                 "rawPeerCount": len(raw_peer_symbols),
                 "filteredPeerCount": len(filtered_peer_symbols),
                 "peerCount": len(peer_symbols),
-                "peerSource": "FMP stock-peers endpoint",
+                "peerSource": peer_source_label or "FMP stock-peers endpoint",
                 "selectionNote": selection_note,
             }
         ]

@@ -145,6 +145,64 @@ def fetch_reference_options_contracts(
     return payload.get("results", [])
 
 
+def fetch_reference_options_contracts_paginated(
+    underlying_ticker: str,
+    as_of_date: str,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    expired: bool = False,
+    expiration_date_gte: str | None = None,
+    expiration_date_lte: str | None = None,
+    strike_price_gte: float | None = None,
+    strike_price_lte: float | None = None,
+    limit: int = 1000,
+    timeout: int = 20,
+    session: requests.Session | None = None,
+) -> tuple[list[dict], int]:
+    """Fetch every reference-contract page and report the exact request count."""
+    params = {
+        "underlying_ticker": str(underlying_ticker).strip().upper(),
+        "as_of": as_of_date,
+        "expired": str(expired).lower(),
+        "limit": int(limit),
+        "sort": "expiration_date",
+        "order": "asc",
+    }
+    optional_filters = {
+        "expiration_date.gte": expiration_date_gte,
+        "expiration_date.lte": expiration_date_lte,
+        "strike_price.gte": strike_price_gte,
+        "strike_price.lte": strike_price_lte,
+    }
+    params.update(
+        {
+            filter_name: filter_value
+            for filter_name, filter_value in optional_filters.items()
+            if filter_value is not None
+        }
+    )
+
+    records = []
+    request_count = 0
+    next_url = "/v3/reference/options/contracts"
+    first_request = True
+    while next_url:
+        request_count += 1
+        payload = massive_request_json(
+            next_url,
+            api_key=api_key,
+            base_url=base_url,
+            params=params if first_request else None,
+            timeout=timeout,
+            session=session,
+        )
+        records.extend(payload.get("results", []))
+        next_url = payload.get("next_url")
+        first_request = False
+    return records, request_count
+
+
 def fetch_option_daily_bar(
     option_ticker: str,
     as_of_date: str,
@@ -167,3 +225,32 @@ def fetch_option_daily_bar(
     )
     results = payload.get("results", [])
     return results[0] if results else None
+
+
+def fetch_option_daily_bars(
+    option_ticker: str,
+    start_date: str,
+    end_date: str,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    adjusted: bool = True,
+    limit: int = 50000,
+    timeout: int = 30,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Fetch a contract's complete daily-bar range in one aggregate request."""
+    safe_ticker = quote(str(option_ticker).strip(), safe=":")
+    payload = massive_request_json(
+        f"/v2/aggs/ticker/{safe_ticker}/range/1/day/{start_date}/{end_date}",
+        api_key=api_key,
+        base_url=base_url,
+        params={
+            "adjusted": str(adjusted).lower(),
+            "sort": "asc",
+            "limit": int(limit),
+        },
+        timeout=timeout,
+        session=session,
+    )
+    return payload.get("results", [])

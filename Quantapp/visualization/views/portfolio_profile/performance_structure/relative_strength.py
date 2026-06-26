@@ -109,6 +109,7 @@ def plot_benchmark_snapshot_zscores(
     windows_benchmark_minus_assets_unsigned: Mapping[str, pd.Series],
     sign_series: pd.Series,
     benchmark_label: str,
+    default_window: str | int = "200",
 ) -> go.Figure:
     fig = make_subplots(
         rows=2,
@@ -124,12 +125,24 @@ def plot_benchmark_snapshot_zscores(
         ),
     )
     window_labels = list(windows_signed.keys())
+    default_window_label = str(default_window)
+    default_index = window_labels.index(default_window_label) if default_window_label in window_labels else 0
     for idx, window in enumerate(window_labels):
         z_signed = windows_signed[window]
         z_unsigned = windows_unsigned[window]
         z_diff_signed = windows_benchmark_minus_assets_signed[window]
         z_diff_unsigned = windows_benchmark_minus_assets_unsigned[window]
-        fig.add_trace(go.Bar(x=z_signed.index, y=z_signed.values, name=f"{window}-Day Signed", showlegend=False, visible=idx == 0), row=1, col=1)
+        fig.add_trace(
+            go.Bar(
+                x=z_signed.index,
+                y=z_signed.values,
+                name=f"{window}-Day Signed",
+                showlegend=False,
+                visible=idx == default_index,
+            ),
+            row=1,
+            col=1,
+        )
         fig.add_trace(
             go.Bar(
                 x=z_unsigned.index,
@@ -137,7 +150,7 @@ def plot_benchmark_snapshot_zscores(
                 marker_color=highlight_signed_bars(z_unsigned.index, sign_series),
                 name=f"{window}-Day Unsigned",
                 showlegend=False,
-                visible=idx == 0,
+                visible=idx == default_index,
             ),
             row=1,
             col=2,
@@ -148,7 +161,7 @@ def plot_benchmark_snapshot_zscores(
                 y=z_diff_signed.values,
                 name=f"{window}-Day {benchmark_label} - Asset Spread",
                 showlegend=False,
-                visible=idx == 0,
+                visible=idx == default_index,
             ),
             row=2,
             col=1,
@@ -160,7 +173,7 @@ def plot_benchmark_snapshot_zscores(
                 marker_color=highlight_signed_bars(z_diff_unsigned.index, sign_series),
                 name=f"{window}-Day {benchmark_label} - Asset Spread",
                 showlegend=False,
-                visible=idx == 0,
+                visible=idx == default_index,
             ),
             row=2,
             col=2,
@@ -193,12 +206,13 @@ def plot_benchmark_snapshot_zscores(
         )
 
     fig.update_layout(
-        title=f"Sharpe Z-Scores + {benchmark_label} Sharpe Spread Z-Scores - 21-Day",
+        title=f"Sharpe Z-Scores + {benchmark_label} Sharpe Spread Z-Scores - {window_labels[default_index]}-Day",
         template="plotly_dark",
         updatemenus=[
             dict(
                 buttons=buttons,
                 direction="down",
+                active=default_index,
                 showactive=True,
                 x=0.5,
                 xanchor="center",

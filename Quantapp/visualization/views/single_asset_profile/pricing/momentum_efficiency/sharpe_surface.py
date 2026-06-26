@@ -5,15 +5,18 @@ from __future__ import annotations
 import numpy as np
 import plotly.graph_objects as go
 
-from ._shared import coerce_momentum_diagnostics_context, finalize_dark_figure
+from ._shared import coerce_sharpe_surface_context, finalize_dark_figure
 
 
-def _build_sharpe_surface_trace(surface_frame):
+def _build_sharpe_surface_trace(surface_frame, *, z_min, z_max):
     return go.Surface(
         z=surface_frame.values,
         x=surface_frame.columns,
         y=np.arange(len(surface_frame)),
         colorscale="Viridis",
+        cauto=False,
+        cmin=z_min,
+        cmax=z_max,
         colorbar=dict(title="Sharpe Ratio"),
         name="Sharpe Surface",
     )
@@ -48,7 +51,7 @@ def plot_sharpe_surface_view(
     template="plotly_dark",
 ):
     """Compose the 3D Sharpe surface figure."""
-    context = coerce_momentum_diagnostics_context(diagnostics_context)
+    context = coerce_sharpe_surface_context(diagnostics_context)
     sharpe_surface = context["sharpe_surface"]
     surface_years = context["surface_years"]
     highlight_windows = context["highlight_windows"]
@@ -81,7 +84,7 @@ def plot_sharpe_surface_view(
     date_labels = sharpe_surface.index.strftime("%Y-%m-%d")
     y_vals = np.arange(len(sharpe_surface))
 
-    traces = [_build_sharpe_surface_trace(sharpe_surface)]
+    traces = [_build_sharpe_surface_trace(sharpe_surface, z_min=z_min, z_max=z_max)]
     plane_color_map = {7: "orange", 21: "red", 50: "blue", 200: "green"}
     for window in highlight_windows:
         traces.append(
@@ -107,7 +110,11 @@ def plot_sharpe_surface_view(
                 tickvals=np.arange(0, len(date_labels), step=tick_step),
                 ticktext=date_labels[::tick_step],
             ),
-            zaxis_title="Sharpe Ratio",
+            zaxis=dict(
+                title="Sharpe Ratio",
+                range=[z_min, z_max],
+                autorange=False,
+            ),
         ),
         height=900,
         template=template,

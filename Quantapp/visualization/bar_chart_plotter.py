@@ -1,10 +1,7 @@
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
-#import Quantapps Computation libarary
-from Quantapp.analytics.rolling import Rolling
 import pandas as pd
-import yfinance as yf
 from statsmodels.tsa.stattools import coint
 from IPython.display import display
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +24,8 @@ class BarChartPlotter:
         pass
     
     def plot_sector_market_cap(self, sector):
+        import yfinance as yf
+
         data = market_data.retrieve_market_data()
         stocks = data['SP500'][data['SP500']['Sector'] == sector]
         #go through each row and append the market cap to a new list

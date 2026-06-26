@@ -17,7 +17,6 @@ Start with the README closest to the folder you are working in:
 - [`Research/`](Research/README.md): exploratory analysis, Plotly experiments, and UI prototyping
 - [`company_data/`](company_data/README.md): local ticker-based data cache
 - [`scripts/`](scripts/README.md): maintenance and utility scripts
-- [`thinkorswim scripts/`](<thinkorswim scripts/README.md>): platform-specific thinkScript files
 
 The older `Project_structure.txt` note has been retired. Folder-level Markdown READMEs are now the source of truth for project organization.
 
@@ -51,9 +50,10 @@ Experimental execution environment for investment analysis, Plotly visualization
 
 Current research groups:
 
-- [`Single Asset Profile/`](Research/Single%20Asset%20Profile/README.md)
-- [`Market Profile/`](Research/Market%20Profile/README.md)
-- [`Portfolio Profile/`](Research/Portfolio%20Profile/README.md)
+- [`Single Asset/`](Research/Single%20Asset/README.md)
+- [`Market/`](Research/Market/README.md)
+- [`Macroeconomics/`](Research/Macroeconomics/README.md)
+- [`Portfolio/`](Research/Portfolio/README.md)
 - [`Development/`](Research/Development/README.md)
 - [`_archived/`](Research/_archived/README.md)
 
@@ -64,10 +64,6 @@ Local ticker-based company data cache and working store.
 ### [`scripts/`](scripts/README.md)
 
 Repository maintenance and helper scripts.
-
-### [`thinkorswim scripts/`](<thinkorswim scripts/README.md>)
-
-Standalone thinkScript studies and platform-specific utilities.
 
 ## Supporting Files
 

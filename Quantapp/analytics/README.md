@@ -31,6 +31,7 @@ This shape is accepted by:
 ```python
 compute.latest(close_series, metric=Metric().percent_return)
 compute.rolling(close_series, metric=Metric().z_score, window=21)
+compute.rolling_windows(close_series, metric=pd.Series.std, windows=[21, 50, 200])
 ```
 
 ### Multi-Asset Single Field
@@ -60,6 +61,9 @@ compute.rolling(close_df, metric=Metric().z_score, window=21)
 ```
 
 `compute.latest` and `compute.rolling` apply the metric column by column.
+Use `compute.rolling_windows` when the same metric needs many windows at once.
+Series input returns one column per window; DataFrame input returns MultiIndex columns
+shaped as `(window, original_column)`.
 
 ### Single-Asset OHLCV
 
@@ -132,6 +136,10 @@ Use the compute function that matches the metric input shape:
 ```text
 latest / rolling
     metric receives one Series
+
+rolling_windows
+    metric receives one Series per window when no vectorized path exists
+    common reducers and selected metrics such as Metric.sharpe use optimized multi-window paths
 
 latest_frame / rolling_frame
     metric receives one DataFrame

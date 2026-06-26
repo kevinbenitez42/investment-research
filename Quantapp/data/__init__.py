@@ -8,6 +8,15 @@ from Quantapp.data.benchmark_utils import (
     normalize_benchmark_tickers,
 )
 from Quantapp.data.market_history import get_market_history
+from Quantapp.data.gics_peers import (
+    GICSPeerFrames,
+    build_capitalization_count_table,
+    build_gics_peer_frames,
+    build_gics_peer_table,
+    choose_gics_peer_level,
+    normalize_peer_symbol,
+    select_gics_peer_rows,
+)
 from Quantapp.data.sources.fred import get_historical_treasury_yields
 from Quantapp.data.repositories.fundamentals_repository import (
     BalanceSheetHistory,
@@ -61,6 +70,7 @@ __all__ = [
     "CashFlowHistory",
     "CurrentOptionsChain",
     "GICSDataClient",
+    "GICSPeerFrames",
     "HistoricalOptionsEodPanel",
     "IncomeStatementHistory",
     "PeerAnalysisData",
@@ -75,9 +85,15 @@ __all__ = [
     "get_historical_treasury_yields",
     "get_income_statement_history",
     "get_market_history",
+    "build_capitalization_count_table",
+    "build_gics_peer_frames",
+    "build_gics_peer_table",
+    "choose_gics_peer_level",
     "get_market_constituent_data",
     "get_market_index_tables",
     "get_peer_analysis_data",
     "get_schwab_portfolio_snapshot",
+    "normalize_peer_symbol",
+    "select_gics_peer_rows",
     "yf",
 ]

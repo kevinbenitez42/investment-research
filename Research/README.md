@@ -6,9 +6,10 @@ The code here is allowed to be notebook-shaped and research-driven. Stable or re
 
 Current research groups:
 
-- [`Single Asset Profile/`](Single%20Asset%20Profile/README.md): asset-specific pricing and valuation work
-- [`Market Profile/`](Market%20Profile/README.md): cross-market, sector, asset-class, and macro work
-- [`Portfolio Profile/`](Portfolio%20Profile/README.md): reserved for portfolio-level notebook work
+- [`Single Asset/`](Single%20Asset/README.md): asset-specific pricing and valuation work
+- [`Market/`](Market/README.md): cross-market, sector, and asset-class work
+- [`Macroeconomics/`](Macroeconomics/README.md): global and country-level macro series research
+- [`Portfolio/`](Portfolio/README.md): reserved for portfolio-level notebook work
 - [`Development/`](Development/README.md): scratch, debugging, and migration work
 - [`_archived/`](./_archived/README.md): older notebooks kept for reference
 

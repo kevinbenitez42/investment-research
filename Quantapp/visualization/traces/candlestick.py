@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from Quantapp.analytics.rolling import Rolling
 from Quantapp.analytics.series_utils import calculate_textbook_rolling_max_drawdown
-
-rolling = Rolling()
 
 
 def build_time_range(period_start, period_end, offset=None):
@@ -66,6 +64,31 @@ def build_numeric_axis_range(series_list, include_zero=False, padding_ratio=0.08
     return [min_value - padding, max_value + padding]
 
 
+def _calculate_percentage_drop(data, windows=(14,)):
+    if isinstance(windows, (int, np.integer)):
+        windows = [int(windows)]
+    elif isinstance(windows, Iterable) and not isinstance(windows, (str, bytes)):
+        windows = [int(window) for window in windows]
+    else:
+        raise ValueError("windows must be an integer or an iterable of integers")
+    if not windows:
+        raise ValueError("windows must contain at least one positive integer")
+    if any(window <= 0 for window in windows):
+        raise ValueError("windows must contain positive integers")
+    if "Close" not in data.columns:
+        raise ValueError("The DataFrame must contain a 'Close' column.")
+
+    ticker_copy = data.copy()
+    single_window = len(windows) == 1
+    for window in windows:
+        highest_high = ticker_copy["Close"].rolling(window=window, min_periods=1).max()
+        highest_high_col = "HighestHigh" if single_window else f"HighestHigh_{window}"
+        percentage_drop_col = "PercentageDrop" if single_window else f"PercentageDrop_{window}"
+        ticker_copy[highest_high_col] = highest_high
+        ticker_copy[percentage_drop_col] = -((highest_high - ticker_copy["Close"]) / highest_high) * 100
+    return ticker_copy
+
+
 def build_candlestick_y_range(bundle, start=None, end=None, overlay_mode="all"):
     """Build a visible y-axis range for a candlestick panel plus overlays."""
     price_frame = bundle.get("price_frame")
@@ -100,7 +123,7 @@ def build_candlestick_trace_bundle(
     ticker_data = ticker_data[ticker_data.index.dayofweek < 5]
     holidays = pd.to_datetime(["2023-01-01", "2023-12-25"])
     ticker_data = ticker_data[~ticker_data.index.isin(holidays)]
-    ticker_data = rolling.calculate_percentage_drop(ticker_data, windows=drop_window)
+    ticker_data = _calculate_percentage_drop(ticker_data, windows=drop_window)
     mean_drop = ticker_data["PercentageDrop"].mean()
     std_drop = ticker_data["PercentageDrop"].std()
 
