@@ -14,6 +14,32 @@ PORTFOLIO_EQUAL_MOVE = "ALL"
 PORTFOLIO_BETA_MOVE = "ALL_BETA"
 PORTFOLIO_BETA_PRICE = "ALL_BETA_PRICE"
 PORTFOLIO_MODES = {PORTFOLIO_EQUAL_MOVE, PORTFOLIO_BETA_MOVE, PORTFOLIO_BETA_PRICE}
+PAYOFF_FILTER_ALL = "all"
+PAYOFF_BIAS_LABELS = {
+    "bullish": "Bullish",
+    "bearish": "Bearish",
+    "neutral": "Neutral",
+    "convex": "Long Vol / Tails",
+    "mixed": "Mixed / Complex",
+    "unknown": "Unknown",
+}
+PAYOFF_BIAS_SORT_ORDER = {
+    "bullish": 0,
+    "bearish": 1,
+    "neutral": 2,
+    "convex": 3,
+    "mixed": 4,
+    "unknown": 5,
+}
+PAYOFF_STRUCTURE_TO_BIAS = {
+    "Bullish": "bullish",
+    "Bearish": "bearish",
+    "Neutral / Range": "neutral",
+    "Flat / Neutral": "neutral",
+    "Long Vol / Tails": "convex",
+    "Mixed / Complex": "mixed",
+    "Portfolio Mix": "mixed",
+}
 TOTAL_PL_LINE_COLOR = "#38BDF8"
 PROFIT_FILL_COLOR = "rgba(34, 197, 94, 0.18)"
 LOSS_FILL_COLOR = "rgba(239, 68, 68, 0.18)"
@@ -658,6 +684,158 @@ def _calculate_option_pl_at_prices(legs_frame: pd.DataFrame, prices: np.ndarray)
     return total_pl
 
 
+def _payoff_structure_label(
+    *,
+    low_pl: float,
+    middle_pl: float,
+    high_pl: float,
+    best_low: bool,
+    best_high: bool,
+    max_pl: float,
+    min_pl: float,
+    payoff_flat_band: float,
+) -> tuple[str, str]:
+    pl_scale = max(abs(max_pl), abs(min_pl), 1.0)
+    payoff_tolerance = pl_scale * payoff_flat_band
+    payoff_range = max_pl - min_pl
+
+    if payoff_range <= payoff_tolerance:
+        return "Flat / Neutral", "neutral"
+
+    middle_beats_tails = middle_pl >= max(low_pl, high_pl) + payoff_tolerance
+    tails_beat_middle = min(low_pl, high_pl) >= middle_pl + payoff_tolerance
+
+    if tails_beat_middle:
+        return "Long Vol / Tails", "convex"
+    if middle_beats_tails and not (best_low or best_high):
+        return "Neutral / Range", "neutral"
+    if best_high and not best_low:
+        return "Bullish", "bullish"
+    if best_low and not best_high:
+        return "Bearish", "bearish"
+    if high_pl >= low_pl + payoff_tolerance and high_pl >= middle_pl + payoff_tolerance:
+        return "Bullish", "bullish"
+    if low_pl >= high_pl + payoff_tolerance and low_pl >= middle_pl + payoff_tolerance:
+        return "Bearish", "bearish"
+    if middle_beats_tails:
+        return "Neutral / Range", "neutral"
+    return "Mixed / Complex", "mixed"
+
+
+def build_option_payoff_structure_frame(
+    positions_df: pd.DataFrame,
+    *,
+    portfolio_latest_prices: Mapping[str, float] | None = None,
+    payoff_tail_band: float = 0.10,
+    payoff_flat_band: float = 0.05,
+) -> pd.DataFrame:
+    """Classify each option underlying by the shape of its expiration payoff."""
+    structure_columns = [
+        "payoff_structure",
+        "payoff_bias",
+        "payoff_best_price",
+        "payoff_best_pl",
+        "payoff_worst_pl",
+        "payoff_low_tail_pl",
+        "payoff_middle_pl",
+        "payoff_high_tail_pl",
+    ]
+    empty_frame = pd.DataFrame(columns=structure_columns).rename_axis("ticker")
+
+    if positions_df is None or positions_df.empty:
+        return empty_frame
+
+    required_columns = {"underlying", "strike", "option_type", "net_quantity", "average_price"}
+
+    if required_columns - set(positions_df.columns):
+        return empty_frame
+
+    portfolio_latest_prices = portfolio_latest_prices or {}
+    rows = []
+
+    for underlying_name, legs_frame in positions_df.groupby("underlying", dropna=False):
+        legs = legs_frame.copy()
+
+        for column in ("strike", "net_quantity", "average_price"):
+            legs[column] = pd.to_numeric(legs[column], errors="coerce")
+
+        legs["option_type"] = legs["option_type"].astype(str).str.upper().str[0]
+        legs = legs.dropna(subset=["strike", "option_type", "net_quantity", "average_price"])
+        legs = legs[legs["option_type"].isin(["C", "P"])]
+
+        if legs.empty:
+            continue
+
+        strikes = legs["strike"].dropna().astype(float)
+        current_price = _get_price_for_underlying(underlying_name, portfolio_latest_prices)
+        upper_candidates = [float(strikes.max()) * 2.0]
+
+        if pd.notna(current_price) and current_price > 0:
+            upper_candidates.append(float(current_price) * 2.0)
+
+        upper_price = max(candidate for candidate in upper_candidates if np.isfinite(candidate))
+
+        if not np.isfinite(upper_price) or upper_price <= 0:
+            continue
+
+        grid_values = [np.linspace(0.0, upper_price, 501), strikes.to_numpy(dtype=float)]
+
+        if pd.notna(current_price) and current_price >= 0:
+            grid_values.append(np.array([float(current_price)]))
+
+        price_grid = np.unique(np.concatenate(grid_values))
+        total_pl = _calculate_option_pl_at_prices(legs, price_grid)
+        finite_mask = np.isfinite(price_grid) & np.isfinite(total_pl)
+
+        if not finite_mask.any():
+            continue
+
+        price_grid = price_grid[finite_mask]
+        total_pl = total_pl[finite_mask]
+        max_pl = float(np.nanmax(total_pl))
+        min_pl = float(np.nanmin(total_pl))
+        pl_scale = max(abs(max_pl), abs(min_pl), 1.0)
+        payoff_tolerance = pl_scale * payoff_flat_band
+        best_prices = price_grid[total_pl >= max_pl - payoff_tolerance]
+        best_price = float((best_prices.min() + best_prices.max()) / 2.0)
+        low_pl = float(total_pl[0])
+        high_pl = float(total_pl[-1])
+        middle_price = float(strikes.median()) if not strikes.empty else upper_price / 2.0
+        middle_pl = float(np.interp(middle_price, price_grid, total_pl))
+        tail_width = upper_price * payoff_tail_band
+        best_low = bool(best_prices.min() <= tail_width)
+        best_high = bool(best_prices.max() >= upper_price - tail_width)
+        payoff_structure, payoff_bias = _payoff_structure_label(
+            low_pl=low_pl,
+            middle_pl=middle_pl,
+            high_pl=high_pl,
+            best_low=best_low,
+            best_high=best_high,
+            max_pl=max_pl,
+            min_pl=min_pl,
+            payoff_flat_band=payoff_flat_band,
+        )
+
+        rows.append(
+            {
+                "ticker": underlying_name,
+                "payoff_structure": payoff_structure,
+                "payoff_bias": payoff_bias,
+                "payoff_best_price": best_price,
+                "payoff_best_pl": max_pl,
+                "payoff_worst_pl": min_pl,
+                "payoff_low_tail_pl": low_pl,
+                "payoff_middle_pl": middle_pl,
+                "payoff_high_tail_pl": high_pl,
+            }
+        )
+
+    if not rows:
+        return empty_frame
+
+    return pd.DataFrame(rows).set_index("ticker").rename_axis("ticker")
+
+
 def _format_currency_or_na(value: float) -> str:
     return f"${value:,.2f}" if pd.notna(value) else "N/A"
 
@@ -896,6 +1074,7 @@ def build_option_max_loss_by_underlying_figure(
             "x": x_values,
             "display_profit": chart_frame["display_profit"].tolist(),
             "display_loss": chart_frame["display_loss"].tolist(),
+            "current_pl": chart_frame["current_pl"].tolist(),
             "display_risk_reward": chart_frame["display_risk_reward"].tolist(),
             "profit_text": [
                 "Unbounded" if row.unbounded_profit else f"${row.max_profit:,.0f}"
@@ -928,6 +1107,16 @@ def build_option_max_loss_by_underlying_figure(
                     f"Worst finite P/L: {_format_currency_or_na(row.worst_finite_pl)}<br>"
                     f"Current price: {_format_number_or_na(row.current_price)}<br>"
                     f"Current option P/L: {_format_currency_or_na(row.current_pl)}"
+                )
+                for row in chart_frame.itertuples()
+            ],
+            "current_pl_hover": [
+                (
+                    f"{row.underlying}<br>"
+                    f"Current option P/L: {_format_currency_or_na(row.current_pl)}<br>"
+                    f"Current price: {_format_number_or_na(row.current_price)}<br>"
+                    f"Max profit: {'Unbounded' if row.unbounded_profit else _format_currency_or_na(row.max_profit)}<br>"
+                    f"Max loss: {'Unbounded' if row.unbounded_loss else _format_currency_or_na(row.max_loss)}"
                 )
                 for row in chart_frame.itertuples()
             ],
@@ -1138,6 +1327,8 @@ def build_option_max_loss_by_underlying_figure(
         )
         filter_payloads.append((filter_label, filtered_frame, _chart_payload(filtered_frame)))
 
+    traces_per_filter = 4
+
     for filter_index, (_, _, payload) in enumerate(filter_payloads):
         trace_visible = filter_index == 0
         fig.add_trace(
@@ -1170,6 +1361,25 @@ def build_option_max_loss_by_underlying_figure(
                 marker=dict(
                     color=payload["loss_color"],
                     line=dict(color="rgba(255, 255, 255, 0.35)", width=1),
+                ),
+                visible=trace_visible,
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=payload["x"],
+                y=payload["current_pl"],
+                name="Current Option P/L",
+                mode="markers",
+                hovertext=payload["current_pl_hover"],
+                hoverinfo="text",
+                marker=dict(
+                    symbol="diamond",
+                    size=12,
+                    color="#FACC15",
+                    line=dict(color="#111827", width=1.5),
                 ),
                 visible=trace_visible,
             ),
@@ -1226,9 +1436,11 @@ def build_option_max_loss_by_underlying_figure(
 
     for filter_index, (filter_label, filtered_frame, payload) in enumerate(filter_payloads):
         visible = [False] * len(fig.data)
-        visible[filter_index * 3] = True
-        visible[filter_index * 3 + 1] = True
-        visible[filter_index * 3 + 2] = True
+        filter_trace_start = filter_index * traces_per_filter
+        visible[filter_trace_start] = True
+        visible[filter_trace_start + 1] = True
+        visible[filter_trace_start + 2] = True
+        visible[filter_trace_start + 3] = True
         filter_buttons.append(
             {
                 "label": filter_label,
@@ -1263,7 +1475,11 @@ def build_option_max_loss_by_underlying_figure(
         )
 
     fig.update_layout(
-        title="Option Max Profit and Max Loss by Ticker<br><sup>Losses plot below zero; unbounded reflects net call exposure</sup>",
+        title=(
+            "Option Max Profit and Max Loss by Ticker<br>"
+            "<sup>Losses plot below zero; yellow diamonds mark current option P/L; "
+            "unbounded reflects net call exposure</sup>"
+        ),
         xaxis_title="Ticker",
         yaxis_title="P/L ($)",
         template="plotly_dark",
@@ -2316,6 +2532,582 @@ def build_option_expiration_pl_selector_figure(
         return None
 
     return _build_dropdown_selector_figure(selector_figures, default_underlying)
+
+
+def _normalize_payoff_structure_frame(
+    payoff_structure_frame: pd.DataFrame | None,
+    positions_df: pd.DataFrame,
+    portfolio_latest_prices: Mapping[str, float],
+) -> pd.DataFrame:
+    available_underlyings = _available_underlyings(positions_df)
+
+    if payoff_structure_frame is None or payoff_structure_frame.empty:
+        frame = build_option_payoff_structure_frame(
+            positions_df,
+            portfolio_latest_prices=portfolio_latest_prices,
+        )
+    else:
+        frame = payoff_structure_frame.copy()
+
+        if "ticker" in frame.columns:
+            frame = frame.set_index("ticker")
+        elif "underlying" in frame.columns:
+            frame = frame.set_index("underlying")
+
+    if frame.empty:
+        frame = pd.DataFrame(index=pd.Index(available_underlyings, name="ticker"))
+    else:
+        frame.index = frame.index.astype(str)
+        frame = frame[~frame.index.duplicated(keep="first")]
+        frame = frame.reindex(pd.Index(available_underlyings, name="ticker"))
+
+    if "payoff_structure" not in frame.columns:
+        frame["payoff_structure"] = "Unknown"
+    else:
+        frame["payoff_structure"] = frame["payoff_structure"].fillna("Unknown").astype(str)
+        frame.loc[frame["payoff_structure"].str.strip().eq(""), "payoff_structure"] = "Unknown"
+
+    if "payoff_bias" not in frame.columns:
+        frame["payoff_bias"] = frame["payoff_structure"].map(PAYOFF_STRUCTURE_TO_BIAS)
+
+    frame["payoff_bias"] = (
+        frame["payoff_bias"]
+        .where(frame["payoff_bias"].notna(), "unknown")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .replace({"": "unknown", "nan": "unknown", "none": "unknown"})
+    )
+    valid_biases = set(PAYOFF_BIAS_LABELS)
+    frame.loc[~frame["payoff_bias"].isin(valid_biases), "payoff_bias"] = "unknown"
+    return frame.rename_axis("ticker")
+
+
+def _payoff_filter_dropdown_options(payoff_structure_frame: pd.DataFrame) -> list[dict[str, str]]:
+    present_biases = set(payoff_structure_frame.get("payoff_bias", pd.Series(dtype=str)).dropna())
+    ordered_biases = ["bullish", "bearish", "neutral"]
+
+    for optional_bias in ["convex", "mixed", "unknown"]:
+        if optional_bias in present_biases:
+            ordered_biases.append(optional_bias)
+
+    return [
+        {"label": "All payoff structures", "value": PAYOFF_FILTER_ALL},
+        *[
+            {"label": PAYOFF_BIAS_LABELS[bias], "value": bias}
+            for bias in ordered_biases
+        ],
+    ]
+
+
+def _filter_positions_by_payoff_bias(
+    positions_df: pd.DataFrame,
+    payoff_structure_frame: pd.DataFrame,
+    payoff_filter: str | None,
+) -> pd.DataFrame:
+    if payoff_filter in (None, "", PAYOFF_FILTER_ALL):
+        return positions_df.copy()
+
+    if payoff_filter not in PAYOFF_BIAS_LABELS:
+        return positions_df.copy()
+
+    if positions_df.empty or payoff_structure_frame.empty:
+        return positions_df.iloc[0:0].copy()
+
+    matching_tickers = set(
+        payoff_structure_frame.index[
+            payoff_structure_frame["payoff_bias"].eq(payoff_filter)
+        ].astype(str)
+    )
+    return positions_df[positions_df["underlying"].astype(str).isin(matching_tickers)].copy()
+
+
+def _payoff_filter_label(payoff_filter: str | None) -> str:
+    if payoff_filter in (None, "", PAYOFF_FILTER_ALL):
+        return "All payoff structures"
+
+    return PAYOFF_BIAS_LABELS.get(str(payoff_filter), str(payoff_filter).title())
+
+
+def _net_cost_basis_for_positions(
+    net_cost_basis: pd.Series,
+    positions_df: pd.DataFrame,
+) -> pd.Series:
+    if positions_df.empty or net_cost_basis is None or net_cost_basis.empty:
+        return pd.Series(dtype=float, name="net_cost_basis")
+
+    underlyings = _available_underlyings(positions_df)
+    return net_cost_basis.reindex(underlyings).dropna().rename("net_cost_basis")
+
+
+def _payoff_ticker_label(ticker: str, payoff_structure_frame: pd.DataFrame) -> str:
+    if ticker not in payoff_structure_frame.index:
+        return ticker
+
+    payoff_structure = payoff_structure_frame.at[ticker, "payoff_structure"]
+
+    if pd.isna(payoff_structure) or str(payoff_structure).strip() in {"", "Unknown"}:
+        return ticker
+
+    return f"{ticker} - {payoff_structure}"
+
+
+def _empty_option_dashboard_figure(message: str, *, height: int = 420) -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(color="rgba(229, 231, 235, 0.78)", size=14),
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=DARK_PAPER_COLOR,
+        plot_bgcolor=DARK_PLOT_COLOR,
+        font={"color": DARK_FONT_COLOR},
+        height=height,
+        margin=dict(t=44, r=24, b=44, l=56),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+    )
+    return fig
+
+
+def get_available_local_port(host: str = "127.0.0.1") -> int:
+    """Find an available local port for notebook Dash apps."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def build_option_expiration_pl_dash_app(
+    positions_df: pd.DataFrame,
+    *,
+    net_cost_basis: pd.Series | None = None,
+    portfolio_latest_prices: Mapping[str, float] | None = None,
+    benchmark_current_price: float = np.nan,
+    underlying_beta_map: Mapping[str, float] | None = None,
+    benchmark_label: str = "SPY",
+    payoff_structure_frame: pd.DataFrame | None = None,
+    default_payoff_filter: str = PAYOFF_FILTER_ALL,
+    default_underlying: str | None = None,
+    selected_strike_range: str | int | float = "All",
+    app_name: str = "option_expiration_pl_dash",
+    component_prefix: str = "option-expiration-pl",
+):
+    """Build a Dash app for option expiration P/L and payoff-structure filtering."""
+    try:
+        from dash import Dash, Input, Output, State, dcc, html
+    except ImportError as error:
+        raise ImportError(
+            "Dash is required for the option expiration P/L app. Install it with `pip install dash`."
+        ) from error
+
+    if positions_df is None:
+        positions_df = pd.DataFrame()
+
+    positions_df = positions_df.copy()
+    net_cost_basis = net_cost_basis if net_cost_basis is not None else pd.Series(dtype=float, name="net_cost_basis")
+    portfolio_latest_prices = portfolio_latest_prices or {}
+    underlying_beta_map = underlying_beta_map or {}
+    payoff_structure_frame = _normalize_payoff_structure_frame(
+        payoff_structure_frame,
+        positions_df,
+        portfolio_latest_prices,
+    )
+
+    def component_id(name: str) -> str:
+        return f"{component_prefix}-{name}"
+
+    payoff_filter_id = component_id("payoff-filter")
+    view_id = component_id("view")
+    strike_range_id = component_id("strike-range")
+    summary_id = component_id("summary")
+    pl_graph_id = component_id("pl-graph")
+    risk_graph_id = component_id("risk-graph")
+
+    def filtered_positions(payoff_filter: str | None) -> pd.DataFrame:
+        return _filter_positions_by_payoff_bias(positions_df, payoff_structure_frame, payoff_filter)
+
+    def view_options(payoff_filter: str | None) -> list[dict[str, str]]:
+        scoped_positions = filtered_positions(payoff_filter)
+        underlyings = _available_underlyings(scoped_positions)
+
+        if not underlyings:
+            return []
+
+        filter_label = _payoff_filter_label(payoff_filter)
+        portfolio_label = (
+            f"All assets (beta price vs {benchmark_label})"
+            if payoff_filter in (None, "", PAYOFF_FILTER_ALL)
+            else f"{filter_label} basket (beta price vs {benchmark_label})"
+        )
+        return [
+            {"label": portfolio_label, "value": PORTFOLIO_BETA_PRICE},
+            *[
+                {"label": _payoff_ticker_label(underlying, payoff_structure_frame), "value": underlying}
+                for underlying in underlyings
+            ],
+        ]
+
+    def coerce_view_value(payoff_filter: str | None, selected_view: str | None) -> str | None:
+        options = view_options(payoff_filter)
+        option_values = {option["value"] for option in options}
+
+        if selected_view in option_values:
+            return selected_view
+
+        if default_underlying in option_values:
+            return default_underlying
+
+        if PORTFOLIO_BETA_PRICE in option_values:
+            return PORTFOLIO_BETA_PRICE
+
+        return options[0]["value"] if options else None
+
+    def selected_view_positions(payoff_filter: str | None, selected_view: str | None) -> tuple[pd.DataFrame, str | None]:
+        scoped_positions = filtered_positions(payoff_filter)
+        underlyings = set(_available_underlyings(scoped_positions))
+        selected_view = coerce_view_value(payoff_filter, selected_view)
+
+        if selected_view is None:
+            return scoped_positions.iloc[0:0].copy(), None
+
+        if selected_view == PORTFOLIO_BETA_PRICE or selected_view not in underlyings:
+            return scoped_positions, PORTFOLIO_BETA_PRICE
+
+        return scoped_positions[scoped_positions["underlying"].eq(selected_view)].copy(), selected_view
+
+    def payoff_summary_children(payoff_filter: str | None):
+        counts = payoff_structure_frame["payoff_bias"].value_counts()
+        scoped_positions = filtered_positions(payoff_filter)
+        scoped_underlyings = _available_underlyings(scoped_positions)
+
+        def metric(label: str, value: str, color: str = DARK_FONT_COLOR):
+            return html.Div(
+                [
+                    html.Div(label, style={"fontSize": "11px", "color": "rgba(226, 232, 240, 0.72)"}),
+                    html.Div(value, style={"fontSize": "18px", "fontWeight": "700", "color": color}),
+                ],
+                style={
+                    "border": "1px solid rgba(148, 163, 184, 0.24)",
+                    "borderRadius": "8px",
+                    "padding": "10px 12px",
+                    "background": "rgba(15, 23, 42, 0.72)",
+                    "minWidth": "128px",
+                },
+            )
+
+        return [
+            metric("Shown", f"{len(scoped_underlyings):,}", "#38BDF8"),
+            metric("Bullish", f"{int(counts.get('bullish', 0)):,}", "#86EFAC"),
+            metric("Bearish", f"{int(counts.get('bearish', 0)):,}", "#FCA5A5"),
+            metric("Neutral", f"{int(counts.get('neutral', 0)):,}", "#93C5FD"),
+            metric("Filter", _payoff_filter_label(payoff_filter)),
+        ]
+
+    default_payoff_filter = (
+        default_payoff_filter
+        if default_payoff_filter in {PAYOFF_FILTER_ALL, *PAYOFF_BIAS_LABELS.keys()}
+        else PAYOFF_FILTER_ALL
+    )
+    initial_view = coerce_view_value(default_payoff_filter, default_underlying)
+    payoff_filter_options = _payoff_filter_dropdown_options(payoff_structure_frame)
+    strike_range_options = [
+        {"label": "All strikes", "value": "All"},
+        {"label": "+/- $5", "value": 5},
+        {"label": "+/- $10", "value": 10},
+        {"label": "+/- $25", "value": 25},
+        {"label": "+/- $50", "value": 50},
+        {"label": "+/- $100", "value": 100},
+    ]
+
+    app = Dash(app_name)
+    app.index_string = """
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-control,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-multi-value-wrapper,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-input,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-placeholder,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-value,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-value-label {
+                background: #0F172A;
+                color: #E5E7EB !important;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-control {
+                border: 1px solid #475569;
+                box-shadow: none;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-menu-outer {
+                background: #111827;
+                border: 1px solid #475569;
+                color: #E5E7EB;
+                z-index: 1000;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-option,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .VirtualizedSelectOption {
+                background: #111827;
+                color: #E5E7EB;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-option.is-focused,
+            .option-expiration-pl-app .option-expiration-pl-dropdown .VirtualizedSelectFocusedOption {
+                background: #1E293B;
+                color: #F8FAFC;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-option.is-selected {
+                background: #334155;
+                color: #F8FAFC;
+            }
+
+            .option-expiration-pl-app .option-expiration-pl-dropdown .Select-arrow {
+                border-color: #CBD5E1 transparent transparent;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+"""
+    app.layout = html.Div(
+        [
+            html.Div(
+                [
+                    html.H2(
+                        "Option P/L at Expiration",
+                        style={"margin": "0", "fontSize": "24px", "fontWeight": "700"},
+                    ),
+                    html.Div(
+                        "Net cost basis, DTE buckets, and payoff-structure filters",
+                        style={"color": "rgba(226, 232, 240, 0.72)", "fontSize": "13px"},
+                    ),
+                ],
+                style={"display": "flex", "flexDirection": "column", "gap": "4px"},
+            ),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Label("Payoff Structure", style={"fontWeight": "700", "fontSize": "12px"}),
+                            dcc.Dropdown(
+                                id=payoff_filter_id,
+                                options=payoff_filter_options,
+                                value=default_payoff_filter,
+                                clearable=False,
+                                className="option-expiration-pl-dropdown",
+                            ),
+                        ],
+                        style={"minWidth": "210px", "flex": "1 1 210px"},
+                    ),
+                    html.Div(
+                        [
+                            html.Label("View", style={"fontWeight": "700", "fontSize": "12px"}),
+                            dcc.Dropdown(
+                                id=view_id,
+                                options=view_options(default_payoff_filter),
+                                value=initial_view,
+                                clearable=False,
+                                className="option-expiration-pl-dropdown",
+                            ),
+                        ],
+                        style={"minWidth": "280px", "flex": "2 1 280px"},
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Strike Window", style={"fontWeight": "700", "fontSize": "12px"}),
+                            dcc.Dropdown(
+                                id=strike_range_id,
+                                options=strike_range_options,
+                                value=selected_strike_range,
+                                clearable=False,
+                                className="option-expiration-pl-dropdown",
+                            ),
+                        ],
+                        style={"minWidth": "170px", "flex": "0 1 170px"},
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "gap": "12px",
+                    "flexWrap": "wrap",
+                    "alignItems": "end",
+                    "padding": "14px",
+                    "border": "1px solid rgba(148, 163, 184, 0.24)",
+                    "borderRadius": "8px",
+                    "background": "rgba(15, 23, 42, 0.66)",
+                },
+            ),
+            html.Div(
+                id=summary_id,
+                children=payoff_summary_children(default_payoff_filter),
+                style={"display": "flex", "gap": "10px", "flexWrap": "wrap"},
+            ),
+            dcc.Loading(
+                [
+                    dcc.Graph(
+                        id=pl_graph_id,
+                        config={"displayModeBar": True, "responsive": True},
+                        style={"minHeight": "760px"},
+                    ),
+                    dcc.Graph(
+                        id=risk_graph_id,
+                        config={"displayModeBar": True, "responsive": True},
+                        style={"minHeight": "520px"},
+                    ),
+                ],
+                color=TOTAL_PL_LINE_COLOR,
+            ),
+        ],
+        style={
+            "background": "#020617",
+            "color": DARK_FONT_COLOR,
+            "fontFamily": '"IBM Plex Sans", "Segoe UI", sans-serif',
+            "padding": "18px",
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": "14px",
+        },
+        className="option-expiration-pl-app",
+    )
+
+    @app.callback(
+        Output(view_id, "options"),
+        Output(view_id, "value"),
+        Output(summary_id, "children"),
+        Input(payoff_filter_id, "value"),
+        State(view_id, "value"),
+    )
+    def update_view_options(payoff_filter, current_view):
+        options = view_options(payoff_filter)
+        value = coerce_view_value(payoff_filter, current_view)
+        return options, value, payoff_summary_children(payoff_filter)
+
+    @app.callback(
+        Output(pl_graph_id, "figure"),
+        Output(risk_graph_id, "figure"),
+        Input(payoff_filter_id, "value"),
+        Input(view_id, "value"),
+        Input(strike_range_id, "value"),
+    )
+    def update_option_pl_graphs(payoff_filter, selected_view, strike_range):
+        scoped_positions, selected_view = selected_view_positions(payoff_filter, selected_view)
+
+        if scoped_positions.empty:
+            empty_message = f"No option positions matched {_payoff_filter_label(payoff_filter)}."
+            return (
+                _empty_option_dashboard_figure(empty_message, height=560),
+                _empty_option_dashboard_figure(empty_message, height=420),
+            )
+
+        scoped_net_cost_basis = _net_cost_basis_for_positions(net_cost_basis, scoped_positions)
+
+        if selected_view == PORTFOLIO_BETA_PRICE:
+            pl_fig = build_portfolio_beta_price_dte_grid_figure(
+                scoped_positions,
+                strike_range,
+                net_cost_basis=scoped_net_cost_basis,
+                portfolio_latest_prices=portfolio_latest_prices,
+                benchmark_current_price=benchmark_current_price,
+                underlying_beta_map=underlying_beta_map,
+                benchmark_label=benchmark_label,
+            )
+        else:
+            pl_fig = build_underlying_option_expiration_pl_dte_grid_figure(
+                scoped_positions,
+                selected_view,
+                strike_range,
+                net_cost_basis=scoped_net_cost_basis,
+                portfolio_latest_prices=portfolio_latest_prices,
+            )
+
+        risk_fig = build_option_max_loss_by_underlying_figure(
+            scoped_positions,
+            portfolio_latest_prices=portfolio_latest_prices,
+        )
+
+        return (
+            pl_fig or _empty_option_dashboard_figure("No P/L figure could be built.", height=560),
+            risk_fig or _empty_option_dashboard_figure("No risk figure could be built.", height=420),
+        )
+
+    app.option_payoff_structure_frame = payoff_structure_frame
+    return app
+
+
+def display_option_expiration_pl_dash_app(
+    positions_df: pd.DataFrame,
+    *,
+    net_cost_basis: pd.Series | None = None,
+    portfolio_latest_prices: Mapping[str, float] | None = None,
+    benchmark_current_price: float = np.nan,
+    underlying_beta_map: Mapping[str, float] | None = None,
+    benchmark_label: str = "SPY",
+    payoff_structure_frame: pd.DataFrame | None = None,
+    default_payoff_filter: str = PAYOFF_FILTER_ALL,
+    default_underlying: str | None = None,
+    selected_strike_range: str | int | float = "All",
+    host: str = "127.0.0.1",
+    port: int | None = None,
+    jupyter_mode: str | None = "inline",
+    jupyter_height: int = 3200,
+    jupyter_width: str = "100%",
+    debug: bool = False,
+):
+    """Build and run the option expiration P/L Dash app in a notebook."""
+    app = build_option_expiration_pl_dash_app(
+        positions_df,
+        net_cost_basis=net_cost_basis,
+        portfolio_latest_prices=portfolio_latest_prices,
+        benchmark_current_price=benchmark_current_price,
+        underlying_beta_map=underlying_beta_map,
+        benchmark_label=benchmark_label,
+        payoff_structure_frame=payoff_structure_frame,
+        default_payoff_filter=default_payoff_filter,
+        default_underlying=default_underlying,
+        selected_strike_range=selected_strike_range,
+    )
+    run_kwargs = {
+        "host": host,
+        "port": port if port is not None else get_available_local_port(host),
+        "debug": debug,
+    }
+
+    if jupyter_mode is not None:
+        run_kwargs["jupyter_mode"] = jupyter_mode
+        run_kwargs["jupyter_height"] = jupyter_height
+        run_kwargs["jupyter_width"] = jupyter_width
+
+    try:
+        app.run(**run_kwargs)
+    except TypeError:
+        run_kwargs.pop("jupyter_mode", None)
+        run_kwargs.pop("jupyter_height", None)
+        run_kwargs.pop("jupyter_width", None)
+        app.run_server(**run_kwargs)
+
+    return app
 
 
 def display_option_expiration_pl_view(

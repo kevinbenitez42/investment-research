@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from .implied_move import build_atm_implied_move_term_structure
 
@@ -176,6 +177,81 @@ def _bar_trace(chain_df, *, name, color, visible):
     )
 
 
+def _put_call_skew_trace(call_chain, put_chain, *, visible):
+    """Return put IV minus call IV at strikes shared by both sides."""
+    required_columns = {"strike", "impliedVolatility"}
+    if not required_columns.issubset(call_chain.columns) or not required_columns.issubset(
+        put_chain.columns
+    ):
+        return go.Scatter(x=[], y=[], name="Put - Call IV", visible=visible)
+
+    calls = call_chain[["strike", "impliedVolatility"]].copy()
+    puts = put_chain[["strike", "impliedVolatility"]].copy()
+    for frame in (calls, puts):
+        frame["strike"] = pd.to_numeric(frame["strike"], errors="coerce")
+        frame["impliedVolatility"] = pd.to_numeric(
+            frame["impliedVolatility"], errors="coerce"
+        )
+        frame.dropna(inplace=True)
+
+    skew = calls.merge(puts, on="strike", suffixes=("_call", "_put"))
+    skew["put_call_skew"] = (
+        skew["impliedVolatility_put"] - skew["impliedVolatility_call"]
+    )
+    skew.sort_values("strike", inplace=True)
+    return go.Scatter(
+        x=skew["strike"],
+        y=skew["put_call_skew"],
+        customdata=skew[["impliedVolatility_put", "impliedVolatility_call"]],
+        mode="lines+markers",
+        name="Put - Call IV",
+        line=dict(color="#A855F7"),
+        visible=visible,
+        hovertemplate=(
+            "Strike: %{x:,.2f}<br>Put-call skew: %{y:+.2%}<br>"
+            "Put IV: %{customdata[0]:.2%}<br>Call IV: %{customdata[1]:.2%}"
+            "<extra></extra>"
+        ),
+    )
+
+
+def _subplot_overlays(expiration, call_chain, put_chain, spot_price):
+    """Place the original implied-move/OI overlays on the upper subplot."""
+    shapes, annotations = _expiration_overlays(
+        expiration, call_chain, put_chain, spot_price
+    )
+    for shape in shapes:
+        shape.update(xref="x", yref="y")
+    for annotation in annotations:
+        annotation.update(xref="x", yref="y")
+
+    shapes.extend(
+        [
+            dict(
+                type="line",
+                x0=spot_price,
+                x1=spot_price,
+                y0=0,
+                y1=1,
+                xref="x2",
+                yref="y2 domain",
+                line=dict(color="red", dash="dash", width=2),
+            ),
+            dict(
+                type="line",
+                x0=0,
+                x1=1,
+                y0=0,
+                y1=0,
+                xref="x2 domain",
+                yref="y2",
+                line=dict(color="#94A3B8", dash="dash", width=1),
+            ),
+        ]
+    )
+    return shapes, annotations
+
+
 def plot_open_interest_implied_move_ranges_view(
     call_contract_chain,
     put_contract_chain,
@@ -184,12 +260,19 @@ def plot_open_interest_implied_move_ranges_view(
     spot_price,
     template="plotly_white",
 ):
-    """Compose open-interest bars with the selected expiration's ATM implied move."""
+    """Plot one DTE at a time, with call/put OI above put-call IV skew."""
     expirations = list(expirations)
     if not expirations:
         raise ValueError("No option expirations are available to plot.")
 
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        row_heights=[0.68, 0.32],
+        subplot_titles=("Call and Put Open Interest", "Put-Call IV Skew"),
+    )
     buttons = []
     first_expiration = expirations[0]
 
@@ -197,14 +280,22 @@ def plot_open_interest_implied_move_ranges_view(
         call_chain = call_contract_chain[expiration]
         put_chain = put_contract_chain[expiration]
         visible = exp_index == 0
-        fig.add_trace(_bar_trace(call_chain, name="Calls", color="blue", visible=visible))
-        fig.add_trace(_bar_trace(put_chain, name="Puts", color="green", visible=visible))
+        fig.add_trace(
+            _bar_trace(call_chain, name="Calls", color="blue", visible=visible), row=1, col=1
+        )
+        fig.add_trace(
+            _bar_trace(put_chain, name="Puts", color="green", visible=visible), row=1, col=1
+        )
+        fig.add_trace(
+            _put_call_skew_trace(call_chain, put_chain, visible=visible), row=2, col=1
+        )
 
-        trace_visibility = [False] * (len(expirations) * 2)
-        trace_visibility[exp_index * 2] = True
-        trace_visibility[exp_index * 2 + 1] = True
-        shapes, annotations = _expiration_overlays(expiration, call_chain, put_chain, spot_price)
+        trace_visibility = [False] * (len(expirations) * 3)
+        trace_visibility[exp_index * 3 : exp_index * 3 + 3] = [True, True, True]
         days_to_expiration = _days_to_expiration(expiration, call_chain, put_chain)
+        shapes, annotations = _subplot_overlays(
+            expiration, call_chain, put_chain, spot_price
+        )
         buttons.append(
             dict(
                 label=f"{expiration} ({days_to_expiration} DTE)",
@@ -212,7 +303,7 @@ def plot_open_interest_implied_move_ranges_view(
                 args=[
                     {"visible": trace_visibility},
                     {
-                        "title": f"Open Interest & ATM Implied Move: {expiration}",
+                        "title": f"Open Interest & Put-Call Skew: {days_to_expiration} DTE ({expiration})",
                         "shapes": shapes,
                         "annotations": annotations,
                     },
@@ -220,25 +311,29 @@ def plot_open_interest_implied_move_ranges_view(
             )
         )
 
-    first_shapes, first_annotations = _expiration_overlays(
+    first_dte = _days_to_expiration(
+        first_expiration, call_contract_chain[first_expiration], put_contract_chain[first_expiration]
+    )
+    first_shapes, first_annotations = _subplot_overlays(
         first_expiration,
         call_contract_chain[first_expiration],
         put_contract_chain[first_expiration],
         spot_price,
     )
     fig.update_layout(
-        title=f"Open Interest & ATM Implied Move: {first_expiration}",
+        title=f"Open Interest & Put-Call Skew: {first_dte} DTE ({first_expiration})",
         updatemenus=[dict(active=0, buttons=buttons, x=0, y=1.15, xanchor="left", yanchor="top")],
         barmode="group",
-        xaxis_title="Strike Price",
-        yaxis_title="Open Interest",
         template=template,
-        height=600,
+        height=850,
         shapes=first_shapes,
         annotations=first_annotations,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
+    fig.update_xaxes(title_text="Strike Price", row=2, col=1)
+    fig.update_yaxes(title_text="Open Interest", row=1, col=1)
+    fig.update_yaxes(title_text="Put IV - Call IV", tickformat="+.1%", row=2, col=1)
     return fig
 
 

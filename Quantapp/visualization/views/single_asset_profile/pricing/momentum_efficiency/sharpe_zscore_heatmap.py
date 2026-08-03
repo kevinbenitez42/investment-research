@@ -431,6 +431,7 @@ def plot_sharpe_zscore_heatmap_view(
     benchmark_heatmap_matrices=None,
     *,
     asset_sharpe_zscore_frame=None,
+    benchmark_sharpe_zscore_frames=None,
     benchmark_spread_zscore_frames=None,
     sharpe_heatmap_context=None,
     benchmark_plot_payload=None,
@@ -470,10 +471,21 @@ def plot_sharpe_zscore_heatmap_view(
         if default_benchmark is None:
             default_benchmark = benchmark_plot_payload.get("default_benchmark")
 
+    benchmark_sharpe_zscore_matrices = {}
+    if benchmark_sharpe_zscore_frames is not None:
+        benchmark_sharpe_zscore_matrices, heatmap_windows = _benchmark_heatmap_matrices_from_zscore_frames(
+            benchmark_sharpe_zscore_frames,
+            heatmap_windows=heatmap_windows,
+        )
+
     asset_matrix = _coerce_heatmap_frame(heatmap_matrix)
     benchmark_heatmap_matrices = {
         symbol: _coerce_heatmap_frame(matrix)
         for symbol, matrix in (benchmark_heatmap_matrices or {}).items()
+    }
+    benchmark_sharpe_zscore_matrices = {
+        symbol: _coerce_heatmap_frame(matrix)
+        for symbol, matrix in benchmark_sharpe_zscore_matrices.items()
     }
 
     benchmark_order = _benchmark_order(benchmark_heatmap_matrices, benchmark_order)
@@ -484,6 +496,10 @@ def plot_sharpe_zscore_heatmap_view(
     asset_daily_mean = _cross_window_mean(asset_matrix)
     benchmark_daily_mean = {
         symbol: _cross_window_mean(benchmark_heatmap_matrices[symbol])
+        for symbol in benchmark_order
+    }
+    benchmark_sharpe_daily_mean = {
+        symbol: _cross_window_mean(benchmark_sharpe_zscore_matrices.get(symbol, pd.DataFrame()))
         for symbol in benchmark_order
     }
     asset_green_window_average, asset_green_window_count = _average_signal_window_summary(
@@ -522,7 +538,7 @@ def plot_sharpe_zscore_heatmap_view(
         row_heights=[0.31, 0.19, 0.31, 0.19],
         subplot_titles=(
             "Asset Sharpe Z-Score by Rolling Window",
-            "Asset Cross-Window Mean Sharpe Z-Score",
+            "Asset and Benchmark Cross-Window Mean Sharpe Z-Score",
             "Benchmark Sharpe Spread Z-Score by Rolling Window",
             "Benchmark Cross-Window Mean Sharpe Spread Z-Score",
         ),
@@ -710,12 +726,36 @@ def plot_sharpe_zscore_heatmap_view(
             fig.add_trace(trace, row=3, col=1)
             signal_window_trace_indices.append(len(fig.data) - 1)
 
+        mean_trace_indices = []
+        symbol_sharpe_mean = benchmark_sharpe_daily_mean.get(symbol, pd.Series(dtype=float))
+        if not symbol_sharpe_mean.empty:
+            fig.add_trace(
+                build_line_trace(
+                    x=symbol_sharpe_mean.index,
+                    y=symbol_sharpe_mean,
+                    name=f"{symbol} Cross-Window Mean Sharpe Z-Score",
+                    color="#f97316",
+                    width=2.2,
+                    dash="dash",
+                    hovertemplate=(
+                        "Benchmark: " + symbol + "<br>"
+                        "Date: %{x|%Y-%m-%d}<br>"
+                        "Mean Sharpe Z-Score: %{y:.2f}<extra></extra>"
+                    ),
+                    visible=visible,
+                    showlegend=True,
+                ),
+                row=2,
+                col=1,
+            )
+            mean_trace_indices.append(len(fig.data) - 1)
+
         symbol_mean = benchmark_daily_mean.get(symbol, pd.Series(dtype=float))
         fig.add_trace(
             build_line_trace(
                 x=symbol_mean.index,
                 y=symbol_mean,
-                name=f"{symbol} Cross-Window Mean",
+                name=f"{symbol} Cross-Window Mean Sharpe Spread Z-Score",
                 color="#38bdf8",
                 width=2.2,
                 hovertemplate=(
@@ -724,14 +764,14 @@ def plot_sharpe_zscore_heatmap_view(
                     "Mean Sharpe Spread Z-Score: %{y:.2f}<extra></extra>"
                 ),
                 visible=visible,
-                showlegend=False,
+                showlegend=True,
             ),
             row=4,
             col=1,
         )
-        mean_trace_idx = len(fig.data) - 1
+        mean_trace_indices.append(len(fig.data) - 1)
 
-        benchmark_trace_bounds[symbol] = (heatmap_trace_idx, signal_window_trace_indices, mean_trace_idx)
+        benchmark_trace_bounds[symbol] = (heatmap_trace_idx, signal_window_trace_indices, mean_trace_indices)
 
     if len(benchmark_mean_x) > 0:
         fig.add_trace(
@@ -770,7 +810,13 @@ def plot_sharpe_zscore_heatmap_view(
     fig.update_yaxes(title_text="Rolling Window (Days)", autorange="reversed", row=1, col=1)
     fig.update_yaxes(
         title_text="Mean Sharpe Z-Score",
-        range=_numeric_axis_range([asset_daily_mean, MEAN_PANEL_AXIS_RANGE_ANCHOR]),
+        range=_numeric_axis_range(
+            [
+                asset_daily_mean,
+                *benchmark_sharpe_daily_mean.values(),
+                MEAN_PANEL_AXIS_RANGE_ANCHOR,
+            ]
+        ),
         zeroline=False,
         row=2,
         col=1,
@@ -792,11 +838,12 @@ def plot_sharpe_zscore_heatmap_view(
             visibility = [False] * total_traces
             for trace_idx in constant_trace_indices:
                 visibility[trace_idx] = True
-            heatmap_trace_idx, signal_window_trace_indices, mean_trace_idx = benchmark_trace_bounds[symbol]
+            heatmap_trace_idx, signal_window_trace_indices, mean_trace_indices = benchmark_trace_bounds[symbol]
             visibility[heatmap_trace_idx] = True
             for trace_idx in signal_window_trace_indices:
                 visibility[trace_idx] = True
-            visibility[mean_trace_idx] = True
+            for trace_idx in mean_trace_indices:
+                visibility[trace_idx] = True
             benchmark_buttons.append(
                 dict(
                     label=symbol,

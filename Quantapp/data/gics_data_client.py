@@ -15,6 +15,10 @@ def _project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 
 
+def _reference_data_directory():
+    return os.path.join(_project_root(), 'data', 'reference')
+
+
 class GICSDataClient:
     
     def __init__(self, client=None,save_path=None, debug=False):
@@ -29,16 +33,17 @@ class GICSDataClient:
     def _gics_structure_path(self):
         candidates = [
             os.path.join(self.save_path, 'gics_structure.csv'),
-            os.path.join(_project_root(), 'gics_structure.csv'),
+            os.path.join(_reference_data_directory(), 'gics_structure.csv'),
         ]
 
         for path in candidates:
             if os.path.exists(path):
                 return path
 
-        os.makedirs(self.save_path, exist_ok=True)
+        target_directory = self.save_path if self.save_path != _project_root() else _reference_data_directory()
+        os.makedirs(target_directory, exist_ok=True)
         self.get_latest_gics_structure()
-        return os.path.join(self.save_path, 'gics_structure.csv')
+        return os.path.join(target_directory, 'gics_structure.csv')
 
     def _load_gics_table(self):
         return pd.read_csv(self._gics_structure_path())
@@ -60,9 +65,9 @@ class GICSDataClient:
         # Drop rows with NaN values and reset the index
         gics_table = gics_table.dropna().reset_index(drop=True)
         
-        # Save table to current directory as gics_structure.csv
-        os.makedirs(self.save_path, exist_ok=True)
-        gics_table.to_csv(os.path.join(self.save_path, 'gics_structure.csv'), index=False)
+        target_directory = self.save_path if self.save_path != _project_root() else _reference_data_directory()
+        os.makedirs(target_directory, exist_ok=True)
+        gics_table.to_csv(os.path.join(target_directory, 'gics_structure.csv'), index=False)
         
         return gics_table
     
@@ -87,39 +92,35 @@ class GICSDataClient:
         sp500_table['Capitalization'] = 'Large Cap'
         
     
-        # Combine all tables into one DataFrame
+        # Combine all tables and enrich them with one vectorized GICS lookup.
+        # The previous row-wise name_to_gics call reread the reference CSV for
+        # every company and then scanned it again for every unique code.
         combined_table = pd.concat([sp500_table, sp400_table, sp600_table], ignore_index=True)
-        #add a column called GICS Code, find the GICS code for each sub-industry using the name_to_gics function (make sure its an int, currently its float)
-        combined_table['GICS Code'] = combined_table['Sub-Industry'].apply(lambda x: self.name_to_gics(x, level='Sub-Industry'))
-        combined_table['GICS Code'] = combined_table['GICS Code'].astype('Int64')
-        
         gics_table = self._load_gics_table()
-        
-        #these are the unique GICS codes in the combined table
-        all_gics_codes_combined_table = combined_table['GICS Code'].unique().tolist()
-        #for each of these gics codes, retrieve 'Sector', 'Industry Group', 'Industry', 'Sector code', 'Industry Group Code', 'Industry Code',  from gics_table
-        #add thess columns to the combined table
-        gics_info_list = []
-        for gics_code in all_gics_codes_combined_table:
-            gics_info = gics_table[gics_table['Sub-Industry Code'] == gics_code]
-            if not gics_info.empty:
-                gics_info_list.append({
-                    'GICS Code': gics_code,
-                    'Sector': gics_info.iloc[0]['Sector Name'],
-                    'Industry Group': gics_info.iloc[0]['Industry Group Name'],
-                    'Industry': gics_info.iloc[0]['Industry Name'],
-                    'Sector Code': gics_info.iloc[0]['Sector Code'],
-                    'Industry Group Code': gics_info.iloc[0]['Industry Group Code'],
-                    'Industry Code': gics_info.iloc[0]['Industry Code']
-                })
-                
-        gics_info_df = pd.DataFrame(gics_info_list)
-      
-        combined_table = pd.merge(combined_table, gics_info_df, on='GICS Code', how='left')
-        combined_table.rename(columns={
-            'Sector_x': 'Sector',
-        }, inplace=True)
-        combined_table = combined_table.drop(columns=['Sector_y'])
+        gics_lookup = (
+            gics_table[
+                [
+                    'Sub-Industry Name',
+                    'Sub-Industry Code',
+                    'Sector Code',
+                    'Industry Group Name',
+                    'Industry Group Code',
+                    'Industry Name',
+                    'Industry Code',
+                ]
+            ]
+            .drop_duplicates('Sub-Industry Name')
+            .rename(
+                columns={
+                    'Sub-Industry Name': 'Sub-Industry',
+                    'Sub-Industry Code': 'GICS Code',
+                    'Industry Group Name': 'Industry Group',
+                    'Industry Name': 'Industry',
+                }
+            )
+        )
+        combined_table = combined_table.merge(gics_lookup, on='Sub-Industry', how='left')
+        combined_table['GICS Code'] = combined_table['GICS Code'].astype('Int64')
         #make sure the Industry Group code, Industry Code, Sector Code are Int64
         combined_table['Sector Code'] = combined_table['Sector Code'].astype('Int64')
         combined_table['Industry Group Code'] = combined_table['Industry Group Code'].astype('Int64')

@@ -8,6 +8,13 @@ except ModuleNotFoundError:  # Optional dependency path, e.g. investpy not insta
 from .helper import Helper
 from .rolling import Rolling, TimeSeriesAnalytics
 from .series_transforms import SeriesTransforms
+from .option_greeks import (
+    black_scholes_greeks,
+    black_scholes_price,
+    build_option_greek_sensitivity_frame,
+    build_option_greeks_frame,
+    summarize_option_greeks,
+)
 from .series_utils import (
     calculate_historical_var_metrics,
     calculate_max_drawdown,
@@ -25,6 +32,10 @@ __all__ = [
     "SeriesTransforms",
     "Algorithm",
     "Metric",
+    "black_scholes_greeks",
+    "black_scholes_price",
+    "build_option_greek_sensitivity_frame",
+    "build_option_greeks_frame",
     "calculate_zscore",
     "zscore",
     "calculate_historical_var_metrics",
@@ -32,4 +43,5 @@ __all__ = [
     "calculate_rolling_recovery_time",
     "calculate_textbook_rolling_max_drawdown",
     "gini_coefficient",
+    "summarize_option_greeks",
 ]

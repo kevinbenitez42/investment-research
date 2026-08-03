@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
+from statsmodels.regression.rolling import RollingOLS
 
 from Quantapp.analytics.series_utils import coerce_datetime_index, coerce_series
 
@@ -103,28 +104,35 @@ class FactorRegressionModel:
                 f"({len(aligned)} rows), window={effective_window}."
             )
 
-        results = []
-        for end in range(effective_window, len(aligned) + 1):
-            window_data = aligned.iloc[end - effective_window : end]
-            y = window_data["stock"] - window_data["rf"]
-            X = sm.add_constant(window_data[factor_cols], has_constant="add")
-            model = sm.OLS(y, X).fit()
+        y = aligned["stock"] - aligned["rf"]
+        X = sm.add_constant(aligned[factor_cols], has_constant="add")
+        rolling_fit = RollingOLS(
+            y,
+            X,
+            window=effective_window,
+            min_nobs=effective_window,
+            missing="drop",
+        ).fit(params_only=False)
 
-            idio_vol_daily = model.resid.std()
-            regression_result = {
-                "date": window_data.index[-1],
-                "alpha": model.params["const"],
-                "r_squared": model.rsquared,
-                "adj_r_squared": model.rsquared_adj,
-                "idio_vol_daily": idio_vol_daily,
-                "idio_vol_annualized": idio_vol_daily * np.sqrt(annualization),
-            }
-            for factor in factor_cols:
-                regression_result[f"{factor}_beta"] = model.params[factor]
-            results.append(regression_result)
+        valid_index = rolling_fit.params["const"].dropna().index
+        rolling_results_df = pd.DataFrame(index=valid_index)
+        rolling_results_df.index.name = "date"
+        rolling_results_df["alpha"] = rolling_fit.params.loc[valid_index, "const"]
+        rolling_results_df["r_squared"] = rolling_fit.rsquared.loc[valid_index]
+        rolling_results_df["adj_r_squared"] = rolling_fit.rsquared_adj.loc[valid_index]
 
-        rolling_results_df = pd.DataFrame(results)
-        rolling_results_df.set_index("date", inplace=True)
+        # The previous implementation used pandas' residual std (ddof=1).
+        # With an intercept, rolling residuals are zero-mean, so this is exactly
+        # sqrt(SSR / (n - 1)) and does not require refitting every window.
+        residual_denominator = rolling_fit.nobs.loc[valid_index] - 1
+        rolling_results_df["idio_vol_daily"] = np.sqrt(
+            rolling_fit.ssr.loc[valid_index] / residual_denominator
+        )
+        rolling_results_df["idio_vol_annualized"] = (
+            rolling_results_df["idio_vol_daily"] * np.sqrt(annualization)
+        )
+        for factor in factor_cols:
+            rolling_results_df[f"{factor}_beta"] = rolling_fit.params.loc[valid_index, factor]
         rolling_results_df.attrs["window_used"] = effective_window
         rolling_results_df.attrs["aligned_start"] = aligned.index.min().strftime("%Y-%m-%d")
         rolling_results_df.attrs["aligned_end"] = aligned.index.max().strftime("%Y-%m-%d")

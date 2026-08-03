@@ -1,4 +1,4 @@
-"""Stacked monthly, weekly, and daily seasonality view."""
+"""Stacked monthly and quarterly seasonality view."""
 
 from __future__ import annotations
 
@@ -75,6 +75,29 @@ def _prepare_monthly_panel(data: pd.Series, as_of: pd.Timestamp) -> _Seasonality
         period_median=period_median,
         current_returns=current_returns,
         current_period_label=as_of.strftime("%b"),
+    )
+
+
+def _prepare_quarterly_panel(data: pd.Series, as_of: pd.Timestamp) -> _SeasonalityPanel:
+    periods = ["Q1", "Q2", "Q3", "Q4"]
+    period_mean = data.groupby(data.index.quarter).mean().reindex(range(1, 5))
+    period_median = data.groupby(data.index.quarter).median().reindex(range(1, 5))
+    period_mean.index = periods
+    period_median.index = periods
+
+    current_returns = None
+    current_year_returns = data.loc[data.index.year == as_of.year]
+    if not current_year_returns.empty:
+        current_returns = current_year_returns.groupby(current_year_returns.index.quarter).last().reindex(range(1, 5))
+        current_returns.index = periods
+
+    return _SeasonalityPanel(
+        frequency="quarterly",
+        frequency_label="Quarter",
+        period_mean=period_mean,
+        period_median=period_median,
+        current_returns=current_returns,
+        current_period_label=f"Q{as_of.quarter}",
     )
 
 
@@ -281,35 +304,30 @@ def _add_panel_traces(fig: go.Figure, panel: _SeasonalityPanel, *, row: int, as_
 def plot_seasonality_stack_view(
     *,
     monthly_returns,
-    weekly_returns,
-    daily_returns,
+    quarterly_returns,
     ticker_label="Asset",
     as_of=None,
-    daily_window_size=30,
     template="plotly_dark",
 ):
-    """Compose monthly, weekly, and daily return seasonality panels."""
+    """Compose monthly and quarterly return seasonality panels."""
     monthly_series = _coerce_return_series(monthly_returns)
-    weekly_series = _coerce_return_series(weekly_returns)
-    daily_series = _coerce_return_series(daily_returns)
-    as_of = _coerce_as_of(as_of, (monthly_series, weekly_series, daily_series))
+    quarterly_series = _coerce_return_series(quarterly_returns)
+    as_of = _coerce_as_of(as_of, (monthly_series, quarterly_series))
 
     panels = [
         _prepare_monthly_panel(monthly_series, as_of),
-        _prepare_weekly_panel(weekly_series, as_of),
-        _prepare_daily_panel(daily_series, as_of, window_size=int(daily_window_size)),
+        _prepare_quarterly_panel(quarterly_series, as_of),
     ]
 
     fig = make_subplots(
-        rows=3,
+        rows=2,
         cols=1,
         shared_xaxes=False,
-        vertical_spacing=0.08,
-        row_heights=[0.27, 0.31, 0.42],
+        vertical_spacing=0.10,
+        row_heights=[0.56, 0.44],
         subplot_titles=(
             "Monthly Seasonality",
-            "Weekly Seasonality",
-            "Daily Seasonality",
+            "Quarterly Seasonality",
         ),
     )
 
@@ -327,7 +345,7 @@ def plot_seasonality_stack_view(
     fig.update_layout(
         title=f"{ticker_label} Return Seasonality",
         template=template,
-        height=1200,
+        height=850,
         bargap=0.12,
         hovermode="x unified",
         legend=dict(

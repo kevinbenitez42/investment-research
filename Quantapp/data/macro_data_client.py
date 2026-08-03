@@ -81,6 +81,24 @@ class MacroDataClient:
             RequestException: For other request-related errors.
         """
         return fetch_fred_observations_query(query)
+
+    def fetch_fred_series(
+        self,
+        series_ids,
+        start_date=None,
+        end_date=None,
+        max_workers=8,
+        on_error="raise",
+    ):
+        """Fetch a display-name-to-series-ID mapping concurrently from FRED."""
+        return fetch_fred_series_frame(
+            series_ids,
+            api_key=self.fred_api_key,
+            start_date=start_date,
+            end_date=end_date,
+            max_workers=max_workers,
+            on_error=on_error,
+        )
         
     def get_inflation_data(self):
         series_ids = {

@@ -28,7 +28,7 @@ def plot_benchmark_zscore_detail(
     template="plotly_dark",
 ):
     """
-    Plot benchmark detail panel: z-score, Sharpe, excess return, and volatility decomposition.
+    Plot benchmark detail panel: z-score, spread z-score, Sharpe, excess return, and volatility decomposition.
     """
     if not benchmark_order:
         raise ValueError("benchmark_order is empty.")
@@ -43,13 +43,14 @@ def plot_benchmark_zscore_detail(
     default_benchmark = default_benchmark if default_benchmark in benchmark_order else benchmark_order[0]
 
     detail_fig = make_subplots(
-        rows=4,
+        rows=5,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.05,
-        row_heights=[0.32, 0.23, 0.23, 0.22],
+        vertical_spacing=0.04,
+        row_heights=[0.26, 0.20, 0.18, 0.18, 0.18],
         subplot_titles=(
             "Risk-Adjusted Return Z-Score Comparison",
+            "Sharpe Spread Z-Score",
             "Rolling Sharpe Ratio",
             "Annualized Excess Return",
             "Annualized Volatility",
@@ -82,6 +83,7 @@ def plot_benchmark_zscore_detail(
         benchmark_excess_return = metric_set.get("benchmark_excess_return", pd.Series(dtype=float)).dropna()
         asset_volatility = metric_set.get("asset_volatility", pd.Series(dtype=float)).dropna()
         benchmark_volatility = metric_set.get("benchmark_volatility", pd.Series(dtype=float)).dropna()
+        sharpe_spread = metric_set.get("sharpe_spread", pd.Series(dtype=float)).dropna()
 
         detail_fig.add_trace(
             go.Scatter(
@@ -113,6 +115,20 @@ def plot_benchmark_zscore_detail(
         )
         detail_fig.add_trace(
             go.Scatter(
+                x=sharpe_spread.index,
+                y=sharpe_spread,
+                mode="lines",
+                name=f"{symbol} - {ticker_label} {term.title()} Sharpe Spread Z-Score",
+                legendgroup=f"{symbol}-{term}",
+                line=dict(color=style["color"], dash="dash", width=2),
+                visible=visible,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+        detail_fig.add_trace(
+            go.Scatter(
                 x=asset_sharpe.index,
                 y=asset_sharpe,
                 mode="lines",
@@ -122,7 +138,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=2,
+            row=3,
             col=1,
         )
         detail_fig.add_trace(
@@ -136,7 +152,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=2,
+            row=3,
             col=1,
         )
         detail_fig.add_trace(
@@ -150,7 +166,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=3,
+            row=4,
             col=1,
         )
         detail_fig.add_trace(
@@ -164,7 +180,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=3,
+            row=4,
             col=1,
         )
         detail_fig.add_trace(
@@ -178,7 +194,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=4,
+            row=5,
             col=1,
         )
         detail_fig.add_trace(
@@ -192,7 +208,7 @@ def plot_benchmark_zscore_detail(
                 visible=visible,
                 showlegend=False,
             ),
-            row=4,
+            row=5,
             col=1,
         )
 
@@ -212,9 +228,14 @@ def plot_benchmark_zscore_detail(
         add_zone_annotation(detail_fig, 1, -2, -1, "Accumulate", "rgba(235, 255, 235, 0.95)")
         add_zone_annotation(detail_fig, 1, 1, 2, "Liquidate", "rgba(255, 235, 235, 0.95)")
         add_sigma_reference_lines(detail_fig, 1, detail_x_ref)
-        add_mean_reference_line(detail_fig, 2, detail_x_ref)
+        add_horizontal_zone_trace(detail_fig, 2, detail_x_ref, -2, -1.5, "rgba(180, 0, 0, 0.30)")
+        add_horizontal_zone_trace(detail_fig, 2, detail_x_ref, 1.5, 2, "rgba(0, 128, 0, 0.36)")
+        add_zone_annotation(detail_fig, 2, -2, -1.5, "Liquidate", "rgba(255, 235, 235, 0.95)")
+        add_zone_annotation(detail_fig, 2, 1.5, 2, "Accumulate", "rgba(235, 255, 235, 0.95)")
+        add_sigma_reference_lines(detail_fig, 2, detail_x_ref, levels=(0.5, 1, 1.5, 2))
         add_mean_reference_line(detail_fig, 3, detail_x_ref)
         add_mean_reference_line(detail_fig, 4, detail_x_ref)
+        add_mean_reference_line(detail_fig, 5, detail_x_ref)
 
     total_traces = len(detail_fig.data)
     buttons = []
@@ -237,16 +258,17 @@ def plot_benchmark_zscore_detail(
         )
 
     detail_fig.update_yaxes(title_text="Sharpe Z-Score", row=1, col=1)
-    detail_fig.update_yaxes(title_text="Sharpe Ratio", row=2, col=1)
-    detail_fig.update_yaxes(title_text="Excess Return", tickformat=".1%", row=3, col=1)
-    detail_fig.update_yaxes(title_text="Volatility", tickformat=".1%", row=4, col=1)
+    detail_fig.update_yaxes(title_text="Spread Z-Score", row=2, col=1)
+    detail_fig.update_yaxes(title_text="Sharpe Ratio", row=3, col=1)
+    detail_fig.update_yaxes(title_text="Excess Return", tickformat=".1%", row=4, col=1)
+    detail_fig.update_yaxes(title_text="Volatility", tickformat=".1%", row=5, col=1)
 
     detail_start, detail_end = trace_datetime_bounds(detail_fig.data)
     if detail_start is not None and detail_end is not None:
         detail_default_start = max(detail_start, detail_end - pd.DateOffset(years=3))
         detail_fig.update_xaxes(range=[detail_default_start, detail_end])
         time_range_menu = dropdown_menu(
-            buttons=build_time_range_buttons(detail_start, detail_end, axis_count=4),
+            buttons=build_time_range_buttons(detail_start, detail_end, axis_count=5),
             x=0.18 if len(detail_view_order) > 1 else 0.0,
         )
     else:
@@ -267,7 +289,7 @@ def plot_benchmark_zscore_detail(
         title=header_title(
             f"{ticker_label} vs {default_benchmark} Risk-Adjusted Return Decomposition [{default_term.title()} {time_frame_map[default_term]}-Day]"
         ),
-        height=1350,
+        height=1550,
         margin=header_margin(),
         template=template,
         updatemenus=updatemenus,

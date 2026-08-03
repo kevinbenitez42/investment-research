@@ -26,7 +26,7 @@ Active mirrored structure:
   Views used by `Research/Single Asset/Pricing/Backtesting.ipynb`.
 
 - `single_asset_profile/pricing/distribution/`
-  Views used by `Research/Single Asset/Pricing/Distribution.ipynb`, including trade-range and volatility-model comparison views.
+  Views used by `Research/Single Asset/Pricing/Options Pricing & Distribution.ipynb`, including trade-range and volatility-model comparison views.
 
 - `single_asset_profile/pricing/factor_analysis/`
   Views used by `Research/Single Asset/Pricing/Factor Analysis.ipynb`.
@@ -35,7 +35,7 @@ Active mirrored structure:
   Views used by `Research/Single Asset/Pricing/Momentum & Efficiency.ipynb`.
 
 - `single_asset_profile/pricing/options_pricing/`
-  Views used by `Research/Single Asset/Pricing/Options Pricing.ipynb`.
+  Views used by `Research/Single Asset/Pricing/Options Pricing & Distribution.ipynb`.
 
 - `single_asset_profile/pricing/predictive_modeling/`
   Views used by `Research/Single Asset/Pricing/Predictive modeling.ipynb`.

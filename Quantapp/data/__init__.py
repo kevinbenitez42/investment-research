@@ -18,6 +18,7 @@ from Quantapp.data.gics_peers import (
     select_gics_peer_rows,
 )
 from Quantapp.data.sources.fred import get_historical_treasury_yields
+from Quantapp.data.sources.world_bank import fetch_nominal_gdp_current_usd
 from Quantapp.data.repositories.fundamentals_repository import (
     BalanceSheetHistory,
     CashFlowHistory,
@@ -49,6 +50,9 @@ _LAZY_EXPORTS = {
     "GICSDataClient": ("Quantapp.data.gics_data_client", "GICSDataClient"),
     "MacroDataClient": ("Quantapp.data.macro_data_client", "MacroDataClient"),
     "MarketDataClient": ("Quantapp.data.market_data_client", "MarketDataClient"),
+    "get_country_macro_config": ("Quantapp.data.country_macro", "get_country_macro_config"),
+    "list_country_macro_configs": ("Quantapp.data.country_macro", "list_country_macro_configs"),
+    "load_country_macro": ("Quantapp.data.country_macro", "load_country_macro"),
 }
 
 
@@ -83,8 +87,12 @@ __all__ = [
     "get_current_options_chain",
     "get_historical_options_eod_panel",
     "get_historical_treasury_yields",
+    "fetch_nominal_gdp_current_usd",
     "get_income_statement_history",
     "get_market_history",
+    "get_country_macro_config",
+    "list_country_macro_configs",
+    "load_country_macro",
     "build_capitalization_count_table",
     "build_gics_peer_frames",
     "build_gics_peer_table",

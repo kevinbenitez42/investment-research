@@ -4,12 +4,30 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 from urllib.parse import urlencode
 
 import pandas as pd
 import requests
 
 from Quantapp.secrets import load_project_env
+from Quantapp.data.cache import DEFAULT_CACHE_TTL_SECONDS, load_cached_frame, save_cached_frame
+
+_FRED_RATE_LOCK = threading.Lock()
+_FRED_LAST_REQUEST = 0.0
+_FRED_MIN_REQUEST_INTERVAL = 0.5
+
+
+def _wait_for_fred_rate_limit() -> None:
+    """Conservatively cap request starts at two per second."""
+    global _FRED_LAST_REQUEST
+    with _FRED_RATE_LOCK:
+        delay = _FRED_MIN_REQUEST_INTERVAL - (time.monotonic() - _FRED_LAST_REQUEST)
+        if delay > 0:
+            time.sleep(delay)
+        _FRED_LAST_REQUEST = time.monotonic()
 
 DEFAULT_FRED_API_BASE_URL = "https://api.stlouisfed.org/fred"
 FRED_API_KEY_ENV_NAMES = ("FRED_API_KEY",)
@@ -72,6 +90,7 @@ def fetch_fred_observations(
     base_url: str | None = None,
     timeout: int = 30,
     session: requests.Session | None = None,
+    cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
 ) -> pd.DataFrame:
     """Fetch one FRED observations series as a date-indexed DataFrame."""
     resolved_api_key = resolve_fred_api_key(api_key)
@@ -88,11 +107,19 @@ def fetch_fred_observations(
     if end_date is not None:
         params["observation_end"] = format_fred_date(end_date)
 
+    cache_key = "|".join((params["series_id"], str(params.get("observation_start", "")), str(params.get("observation_end", "")), str(base_url or "")))
+    cached = load_cached_frame("fred", cache_key, cache_ttl_seconds)
+    if cached is not None:
+        return cached.copy()
+
     http = session or requests
-    response = http.get(
-        fred_api_url("series/observations", base_url=base_url, params=params),
-        timeout=timeout,
-    )
+    url = fred_api_url("series/observations", base_url=base_url, params=params)
+    for attempt in range(3):
+        _wait_for_fred_rate_limit()
+        response = http.get(url, timeout=timeout)
+        if response.status_code != 429 or attempt == 2:
+            break
+        time.sleep(float(response.headers.get("Retry-After", 2 ** attempt)))
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict) and payload.get("error_message"):
@@ -105,7 +132,9 @@ def fetch_fred_observations(
     frame = pd.DataFrame(observations)
     value = pd.to_numeric(frame["value"], errors="coerce")
     index = pd.to_datetime(frame["date"])
-    return pd.DataFrame({"value": value.values}, index=index)
+    result = pd.DataFrame({"value": value.values}, index=index)
+    save_cached_frame("fred", cache_key, result)
+    return result
 
 
 def fetch_fred_observations_query(
@@ -141,24 +170,53 @@ def fetch_fred_series_frame(
     base_url: str | None = None,
     timeout: int = 30,
     session: requests.Session | None = None,
+    max_workers: int = 8,
+    on_error: str = "raise",
 ) -> pd.DataFrame:
-    """Fetch multiple FRED series into one DataFrame keyed by display name."""
+    """Fetch multiple FRED series concurrently into one DataFrame.
+
+    The returned columns retain the insertion order of ``series_ids``.  The
+    worker count is bounded so larger macro dashboards do not create an
+    excessive number of simultaneous requests.
+    """
+    if on_error not in {"raise", "ignore"}:
+        raise ValueError("on_error must be 'raise' or 'ignore'")
     resolved_api_key = resolve_fred_api_key(api_key)
-    frames = [
-        fetch_fred_observations(
-            series_id,
-            api_key=resolved_api_key,
-            start_date=start_date,
-            end_date=end_date,
-            base_url=base_url,
-            timeout=timeout,
-            session=session,
-        ).rename(columns={"value": name})
-        for name, series_id in series_ids.items()
-    ]
-    if not frames:
+
+    items = list(series_ids.items())
+    if not items:
         return pd.DataFrame()
-    return pd.concat(frames, axis=1).sort_index()
+    if max_workers < 1:
+        raise ValueError("max_workers must be at least 1")
+
+    def fetch_series(item: tuple[str, str]):
+        name, series_id = item
+        try:
+            frame = fetch_fred_observations(
+                series_id,
+                api_key=resolved_api_key,
+                start_date=start_date,
+                end_date=end_date,
+                base_url=base_url,
+                timeout=timeout,
+                session=session,
+            ).rename(columns={"value": name})
+            return name, frame, None
+        except Exception as exc:
+            if on_error == "raise":
+                raise
+            return name, None, f"{type(exc).__name__}: {exc}"
+
+    worker_count = min(max_workers, len(items))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        results = list(executor.map(fetch_series, items))
+
+    frames = [frame for _, frame, error in results if error is None]
+    result = pd.concat(frames, axis=1).sort_index() if frames else pd.DataFrame()
+    result.attrs["fetch_errors"] = {
+        name: error for name, _, error in results if error is not None
+    }
+    return result
 
 
 def fetch_historical_treasury_yields(

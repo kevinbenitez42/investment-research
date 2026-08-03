@@ -16,6 +16,9 @@ _LAZY_EXPORTS = {
     "build_detail_visibility_mask": (".figure_helpers", "build_detail_visibility_mask"),
     "build_visibility_mask": (".figure_helpers", "build_visibility_mask"),
     "add_sigma_reference_lines": (".figure_helpers", "add_sigma_reference_lines"),
+    "add_cycle_bands": (".macro_dashboard", "add_cycle_bands"),
+    "add_timeframe_dropdown": (".macro_dashboard", "add_timeframe_dropdown"),
+    "build_country_macro_figures": (".macro_dashboard", "build_country_macro_figures"),
 }
 
 __all__ = [
@@ -32,6 +35,9 @@ __all__ = [
     "build_detail_visibility_mask",
     "build_visibility_mask",
     "add_sigma_reference_lines",
+    "add_cycle_bands",
+    "add_timeframe_dropdown",
+    "build_country_macro_figures",
 ]
 
 

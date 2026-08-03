@@ -8,9 +8,12 @@ _OPTIONS = ".single_asset_profile.pricing.options_pricing"
 _VALUATION = ".single_asset_profile.valuation"
 
 _LAZY_EXPORTS = {
+    "build_option_expiration_pl_dash_app": (".portfolio_profile", "build_option_expiration_pl_dash_app"),
     "build_option_expiration_pl_figure": (".portfolio_profile", "build_option_expiration_pl_figure"),
     "build_option_max_loss_by_underlying_figure": (".portfolio_profile", "build_option_max_loss_by_underlying_figure"),
+    "build_option_payoff_structure_frame": (".portfolio_profile", "build_option_payoff_structure_frame"),
     "build_option_profit_loss_extremes_table": (".portfolio_profile", "build_option_profit_loss_extremes_table"),
+    "display_option_expiration_pl_dash_app": (".portfolio_profile", "display_option_expiration_pl_dash_app"),
     "display_option_expiration_pl_view": (".portfolio_profile", "display_option_expiration_pl_view"),
     "format_snapshot_map": (".portfolio_profile", "format_snapshot_map"),
     "plot_benchmark_snapshot_zscores": (".portfolio_profile", "plot_benchmark_snapshot_zscores"),
@@ -22,6 +25,7 @@ _LAZY_EXPORTS = {
     "plot_rolling_sharpe_zscore": (".portfolio_profile", "plot_rolling_sharpe_zscore"),
     "plot_rolling_sortino": (".portfolio_profile", "plot_rolling_sortino"),
     "plot_z_score_diff_dropdown": (".portfolio_profile", "plot_z_score_diff_dropdown"),
+    "get_available_local_port": (".portfolio_profile", "get_available_local_port"),
     "plot_backtest_equity_curves_view": (".single_asset_profile.pricing.backtesting", "plot_backtest_equity_curves_view"),
     "plot_candlestick_drawdown_recovery_view": (_MOMENTUM, "plot_candlestick_drawdown_recovery_view"),
     "plot_distribution_shape_zscores_view": (_DISTRIBUTION, "plot_distribution_shape_zscores_view"),
@@ -71,11 +75,15 @@ _LAZY_EXPORTS = {
 }
 
 __all__ = [
+    "build_option_expiration_pl_dash_app",
     "build_option_expiration_pl_figure",
     "build_option_max_loss_by_underlying_figure",
+    "build_option_payoff_structure_frame",
     "build_option_profit_loss_extremes_table",
+    "display_option_expiration_pl_dash_app",
     "display_option_expiration_pl_view",
     "format_snapshot_map",
+    "get_available_local_port",
     "plot_benchmark_snapshot_zscores",
     "plot_equity_curve",
     "plot_options_expiration_ladder",

@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from Quantapp.data.cache import DEFAULT_CACHE_TTL_SECONDS, load_cached_frame, save_cached_frame
+
 
 def _get_yfinance():
     """Import yfinance only when a yfinance-backed call is actually made."""
@@ -34,18 +36,62 @@ def fetch_history_many(
     period: str = "max",
     interval: str = "1d",
 ) -> dict[str, pd.DataFrame]:
-    """Fetch market history for multiple symbols from yfinance."""
-    # Reuse the single-symbol helper so validation and fetch behavior stay consistent.
-    return {
-        str(symbol).strip(): fetch_history(symbol, period=period, interval=interval)
-        for symbol in symbols
-    }
+    """Fetch market history for multiple symbols in one cached batch."""
+    normalized_symbols = list(
+        dict.fromkeys(str(symbol).strip().upper() for symbol in symbols if str(symbol).strip())
+    )
+    if not normalized_symbols:
+        return {}
+
+    panel = download_history(
+        normalized_symbols,
+        period=period,
+        interval=interval,
+        group_by="column",
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+    if panel.empty:
+        return {}
+
+    if len(normalized_symbols) == 1 and not isinstance(panel.columns, pd.MultiIndex):
+        return {normalized_symbols[0]: panel.dropna(how="all")}
+
+    if not isinstance(panel.columns, pd.MultiIndex):
+        return {}
+
+    ticker_level = None
+    for level in range(panel.columns.nlevels):
+        level_values = {str(value).upper() for value in panel.columns.get_level_values(level)}
+        if level_values.intersection(normalized_symbols):
+            ticker_level = level
+            break
+    if ticker_level is None:
+        return {}
+
+    histories = {}
+    for symbol in normalized_symbols:
+        try:
+            history = panel.xs(symbol, axis=1, level=ticker_level).dropna(how="all")
+        except KeyError:
+            continue
+        if not history.empty:
+            histories[symbol] = history
+    return histories
 
 
 def download_history(*args: Any, **kwargs: Any) -> pd.DataFrame:
     """Fetch market history through yfinance.download from the data layer."""
+    cache_ttl_seconds = kwargs.pop("cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS)
+    cache_key = repr((args, sorted(kwargs.items(), key=lambda item: item[0])))
+    cached = load_cached_frame("yfinance", cache_key, cache_ttl_seconds)
+    if cached is not None:
+        return cached.copy()
     yf = _get_yfinance()
-    return yf.download(*args, **kwargs)
+    result = yf.download(*args, **kwargs)
+    save_cached_frame("yfinance", cache_key, result)
+    return result
 
 
 class QuantappTicker:
