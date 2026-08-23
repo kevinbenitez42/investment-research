@@ -1,36 +1,22 @@
-"""Compatibility facade for close-based and OHLC rolling analytics."""
+"""Backward-compatible rolling analytics facade."""
 
 from __future__ import annotations
 
-from .close_analytics import (
-    CloseAnalytics,
-    _calculate_excess_returns,
-    _coerce_periodic_risk_free_rate,
-    _coerce_price_frame,
-    _normalize_windows,
-    _rolling_downside_deviation,
-    _rolling_series_statistic_frame,
-    _rolling_sortino_ratio_frame,
-)
-from .ohlc_analytics import OHLCAnalytics
+from . import compute
 
 
-class TimeSeriesAnalytics(CloseAnalytics, OHLCAnalytics):
-    """Backward-compatible facade combining close-based and OHLC rolling analytics."""
+class Rolling:
+    """Compatibility wrapper around the current ``Quantapp.analytics.compute`` API."""
+
+    latest = staticmethod(compute.latest)
+    latest_frame = staticmethod(compute.latest_frame)
+    latest_by_asset = staticmethod(compute.latest_by_asset)
+    rolling = staticmethod(compute.rolling)
+    rolling_windows = staticmethod(compute.rolling_windows)
+    rolling_frame = staticmethod(compute.rolling_frame)
+    rolling_by_asset = staticmethod(compute.rolling_by_asset)
 
 
-Rolling = TimeSeriesAnalytics
+TimeSeriesAnalytics = Rolling
 
-__all__ = [
-    "CloseAnalytics",
-    "OHLCAnalytics",
-    "Rolling",
-    "TimeSeriesAnalytics",
-    "_calculate_excess_returns",
-    "_coerce_periodic_risk_free_rate",
-    "_coerce_price_frame",
-    "_normalize_windows",
-    "_rolling_downside_deviation",
-    "_rolling_series_statistic_frame",
-    "_rolling_sortino_ratio_frame",
-]
+__all__ = ["Rolling", "TimeSeriesAnalytics"]

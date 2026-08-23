@@ -1,5 +1,156 @@
 """High-level visualization views grouped by analysis domain."""
 
-from .volatility import plot_vix_fix_bands
+from importlib import import_module
 
-__all__ = ["plot_vix_fix_bands"]
+_MOMENTUM = ".single_asset_profile.pricing.momentum_efficiency"
+_DISTRIBUTION = ".single_asset_profile.pricing.distribution"
+_OPTIONS = ".single_asset_profile.pricing.options_pricing"
+_VALUATION = ".single_asset_profile.valuation"
+
+_LAZY_EXPORTS = {
+    "build_option_expiration_pl_dash_app": (".portfolio_profile", "build_option_expiration_pl_dash_app"),
+    "build_option_expiration_pl_figure": (".portfolio_profile", "build_option_expiration_pl_figure"),
+    "build_option_max_loss_by_underlying_figure": (".portfolio_profile", "build_option_max_loss_by_underlying_figure"),
+    "build_option_payoff_structure_frame": (".portfolio_profile", "build_option_payoff_structure_frame"),
+    "build_option_profit_loss_extremes_table": (".portfolio_profile", "build_option_profit_loss_extremes_table"),
+    "display_option_expiration_pl_dash_app": (".portfolio_profile", "display_option_expiration_pl_dash_app"),
+    "display_option_expiration_pl_view": (".portfolio_profile", "display_option_expiration_pl_view"),
+    "format_snapshot_map": (".portfolio_profile", "format_snapshot_map"),
+    "plot_benchmark_snapshot_zscores": (".portfolio_profile", "plot_benchmark_snapshot_zscores"),
+    "plot_equity_curve": (".portfolio_profile", "plot_equity_curve"),
+    "plot_options_expiration_ladder": (".portfolio_profile", "plot_options_expiration_ladder"),
+    "plot_portfolio_rolling_correlation": (".portfolio_profile", "plot_rolling_correlation"),
+    "plot_rolling_portfolio_allocation": (".portfolio_profile", "plot_rolling_portfolio_allocation"),
+    "plot_rolling_portfolio_allocation_stacked": (".portfolio_profile", "plot_rolling_portfolio_allocation_stacked"),
+    "plot_rolling_sharpe_zscore": (".portfolio_profile", "plot_rolling_sharpe_zscore"),
+    "plot_rolling_sortino": (".portfolio_profile", "plot_rolling_sortino"),
+    "plot_z_score_diff_dropdown": (".portfolio_profile", "plot_z_score_diff_dropdown"),
+    "get_available_local_port": (".portfolio_profile", "get_available_local_port"),
+    "plot_backtest_equity_curves_view": (".single_asset_profile.pricing.backtesting", "plot_backtest_equity_curves_view"),
+    "plot_candlestick_drawdown_recovery_view": (_MOMENTUM, "plot_candlestick_drawdown_recovery_view"),
+    "plot_distribution_shape_zscores_view": (_DISTRIBUTION, "plot_distribution_shape_zscores_view"),
+    "plot_idiosyncratic_risk_view": (".single_asset_profile.pricing.factor_analysis", "plot_idiosyncratic_risk_view"),
+    "plot_momentum_window_diagnostics_grid_view": (_MOMENTUM, "plot_momentum_window_diagnostics_grid_view"),
+    "plot_rolling_correlation_view": (_MOMENTUM, "plot_rolling_correlation_view"),
+    "plot_seasonality_stack_view": (_MOMENTUM, "plot_seasonality_stack_view"),
+    "plot_sharpe_surface_view": (_MOMENTUM, "plot_sharpe_surface_view"),
+    "plot_sharpe_zscore_heatmap_view": (_MOMENTUM, "plot_sharpe_zscore_heatmap_view"),
+    "plot_atm_iv_realized_view": (_OPTIONS, "plot_atm_iv_realized_view"),
+    "plot_gbm_paths_view": (_OPTIONS, "plot_gbm_paths_view"),
+    "plot_implied_volatility_by_strike_view": (_OPTIONS, "plot_implied_volatility_by_strike_view"),
+    "plot_iv_minus_realized_by_strike_view": (_OPTIONS, "plot_iv_minus_realized_by_strike_view"),
+    "plot_median_iv_minus_realized_view": (_OPTIONS, "plot_median_iv_minus_realized_view"),
+    "plot_open_interest_overview_view": (_OPTIONS, "plot_open_interest_overview_view"),
+    "plot_open_interest_pot_ranges_view": (_OPTIONS, "plot_open_interest_pot_ranges_view"),
+    "plot_option_chain_table_view": (_OPTIONS, "plot_option_chain_table_view"),
+    "plot_svi_surface_view": (_OPTIONS, "plot_svi_surface_view"),
+    "plot_forward_return_target_view": (".single_asset_profile.pricing.predictive_modeling", "plot_forward_return_target_view"),
+    "plot_prediction_probability_view": (".single_asset_profile.pricing.predictive_modeling", "plot_prediction_probability_view"),
+    "plot_rolling_regression_view": (".single_asset_profile.pricing.factor_analysis", "plot_rolling_regression_view"),
+    "plot_fixed_payout_strategy_backtest_view": (_DISTRIBUTION, "plot_fixed_payout_strategy_backtest_view"),
+    "plot_trade_range_breach_average_view": (_DISTRIBUTION, "plot_trade_range_breach_average_view"),
+    "plot_trade_range_breach_excess_view": (_DISTRIBUTION, "plot_trade_range_breach_excess_view"),
+    "plot_trade_range_stack_view": (_DISTRIBUTION, "plot_trade_range_stack_view"),
+    "plot_volatility_model_comparison_view": (_DISTRIBUTION, "plot_volatility_model_comparison_view"),
+    "plot_vix_fix_bands": (_MOMENTUM, "plot_vix_fix_bands"),
+    "plot_analyst_price_target_band": (_VALUATION, "plot_analyst_price_target_band"),
+    "plot_annual_vs_quarterly_dcf": (_VALUATION, "plot_annual_vs_quarterly_dcf"),
+    "plot_backfilled_dcf_vs_price": (_VALUATION, "plot_backfilled_dcf_vs_price"),
+    "plot_balance_sheet_trends": (_VALUATION, "plot_balance_sheet_trends"),
+    "plot_cash_conversion_capital_allocation": (_VALUATION, "plot_cash_conversion_capital_allocation"),
+    "plot_cash_flow_trends": (_VALUATION, "plot_cash_flow_trends"),
+    "plot_dcf_snapshot_vs_price": (_VALUATION, "plot_dcf_snapshot_vs_price"),
+    "plot_eps_dilution": (_VALUATION, "plot_eps_dilution"),
+    "plot_gross_margin_drivers": (_VALUATION, "plot_gross_margin_drivers"),
+    "plot_income_statement_trends": (_VALUATION, "plot_income_statement_trends"),
+    "plot_liquidity_capital_structure": (_VALUATION, "plot_liquidity_capital_structure"),
+    "plot_market_based_implied_pricing": (_VALUATION, "plot_market_based_implied_pricing"),
+    "plot_net_margin_drivers": (_VALUATION, "plot_net_margin_drivers"),
+    "plot_operating_margin_drivers": (_VALUATION, "plot_operating_margin_drivers"),
+    "plot_price_target_premium_discount": (_VALUATION, "plot_price_target_premium_discount"),
+    "plot_relative_value_vs_peer_medians": (_VALUATION, "plot_relative_value_vs_peer_medians"),
+    "plot_revenue_segmentation": (_VALUATION, "plot_revenue_segmentation"),
+    "plot_seasonal_growth_rates": (_VALUATION, "plot_seasonal_growth_rates"),
+    "plot_ttm_profit_conversion": (_VALUATION, "plot_ttm_profit_conversion"),
+}
+
+__all__ = [
+    "build_option_expiration_pl_dash_app",
+    "build_option_expiration_pl_figure",
+    "build_option_max_loss_by_underlying_figure",
+    "build_option_payoff_structure_frame",
+    "build_option_profit_loss_extremes_table",
+    "display_option_expiration_pl_dash_app",
+    "display_option_expiration_pl_view",
+    "format_snapshot_map",
+    "get_available_local_port",
+    "plot_benchmark_snapshot_zscores",
+    "plot_equity_curve",
+    "plot_options_expiration_ladder",
+    "plot_portfolio_rolling_correlation",
+    "plot_rolling_portfolio_allocation",
+    "plot_rolling_portfolio_allocation_stacked",
+    "plot_rolling_sharpe_zscore",
+    "plot_rolling_sortino",
+    "plot_z_score_diff_dropdown",
+    "plot_backtest_equity_curves_view",
+    "plot_candlestick_drawdown_recovery_view",
+    "plot_distribution_shape_zscores_view",
+    "plot_idiosyncratic_risk_view",
+    "plot_momentum_window_diagnostics_grid_view",
+    "plot_rolling_correlation_view",
+    "plot_seasonality_stack_view",
+    "plot_sharpe_surface_view",
+    "plot_sharpe_zscore_heatmap_view",
+    "plot_atm_iv_realized_view",
+    "plot_gbm_paths_view",
+    "plot_implied_volatility_by_strike_view",
+    "plot_iv_minus_realized_by_strike_view",
+    "plot_median_iv_minus_realized_view",
+    "plot_open_interest_overview_view",
+    "plot_open_interest_pot_ranges_view",
+    "plot_option_chain_table_view",
+    "plot_svi_surface_view",
+    "plot_forward_return_target_view",
+    "plot_prediction_probability_view",
+    "plot_rolling_regression_view",
+    "plot_fixed_payout_strategy_backtest_view",
+    "plot_trade_range_breach_average_view",
+    "plot_trade_range_breach_excess_view",
+    "plot_trade_range_stack_view",
+    "plot_volatility_model_comparison_view",
+    "plot_vix_fix_bands",
+    "plot_analyst_price_target_band",
+    "plot_annual_vs_quarterly_dcf",
+    "plot_backfilled_dcf_vs_price",
+    "plot_balance_sheet_trends",
+    "plot_cash_conversion_capital_allocation",
+    "plot_cash_flow_trends",
+    "plot_dcf_snapshot_vs_price",
+    "plot_eps_dilution",
+    "plot_gross_margin_drivers",
+    "plot_income_statement_trends",
+    "plot_liquidity_capital_structure",
+    "plot_market_based_implied_pricing",
+    "plot_net_margin_drivers",
+    "plot_operating_margin_drivers",
+    "plot_price_target_premium_discount",
+    "plot_relative_value_vs_peer_medians",
+    "plot_revenue_segmentation",
+    "plot_seasonal_growth_rates",
+    "plot_ttm_profit_conversion",
+]
+
+
+def __getattr__(name):
+    if name in _LAZY_EXPORTS:
+        module_name, attribute_name = _LAZY_EXPORTS[name]
+        module = import_module(module_name, __name__)
+        value = getattr(module, attribute_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

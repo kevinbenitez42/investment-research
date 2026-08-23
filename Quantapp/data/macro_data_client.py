@@ -1,6 +1,5 @@
 import datetime
 import os
-from urllib.parse import urlencode
 
 try:
     import nasdaqdatalink
@@ -8,19 +7,22 @@ except ImportError:
     nasdaqdatalink = None
 
 import pandas as pd
-try:
-    import pandas_datareader as pdr
-except ImportError:
-    pdr = None
 
-import requests
-import yfinance as yf
+from Quantapp.data.sources.fred import (
+    fetch_fred_observations_query,
+    fetch_historical_treasury_yields,
+    fetch_fred_series_frame,
+    format_fred_date,
+    fred_api_url,
+    resolve_fred_api_key,
+)
+from Quantapp.data.sources.yfinance_history import fetch_history
 
 class MacroDataClient:
     def __init__(self, fred_key=None):
         self.start_date = datetime.datetime(1900, 1, 1)
         self.end_date = datetime.datetime.now()  # Current date
-        self.fred_api_key = fred_key or os.getenv("FRED_API_KEY")
+        self.fred_api_key = fred_key or resolve_fred_api_key()
         self._configure_nasdaq_data_link()
 
     def _configure_nasdaq_data_link(self):
@@ -44,24 +46,13 @@ class MacroDataClient:
             raise ImportError("nasdaqdatalink is required for this method.")
         return nasdaqdatalink
 
-    def _require_pandas_datareader(self):
-        if pdr is None:
-            raise ImportError("pandas_datareader is required for this method.")
-        return pdr
-
     def _format_fred_date(self, value):
         if value is None:
             return None
-        if isinstance(value, str):
-            return value
-        if isinstance(value, pd.Timestamp):
-            return value.strftime("%Y-%m-%d")
-        if isinstance(value, (datetime.datetime, datetime.date)):
-            return value.strftime("%Y-%m-%d")
-        raise TypeError("Dates must be strings or datetime-like values.")
+        return format_fred_date(value)
 
     def base_url(self, series_id, start_date=None, end_date=None):
-        " Constructs the base URL for FRED API requests."
+        " Constructs the base URL for FRED API calls."
         if not self.fred_api_key:
             raise ValueError("A FRED API key is required. Pass fred_key or set FRED_API_KEY.")
         params = {
@@ -73,7 +64,7 @@ class MacroDataClient:
             params["observation_start"] = self._format_fred_date(start_date)
         if end_date is not None:
             params["observation_end"] = self._format_fred_date(end_date)
-        return "https://api.stlouisfed.org/fred/series/observations?" + urlencode(params)
+        return fred_api_url("series/observations", params=params)
     
     def fetch_fred_json(self,query):
         """
@@ -86,24 +77,28 @@ class MacroDataClient:
             pd.DataFrame: Parsed FRED observations with a datetime index.
             
         Raises:
-            requests.exceptions.HTTPError: If the HTTP request returned an unsuccessful status code.
-            requests.exceptions.RequestException: For other request-related errors.
+            HTTPError: If the HTTP request returned an unsuccessful status code.
+            RequestException: For other request-related errors.
         """
-        try:
-            response = requests.get(query, timeout=30)
-            response.raise_for_status()  # Raise an error for bad status codes
-            df = pd.DataFrame(response.json()['observations']).drop(columns=['realtime_start', 'realtime_end'])
-            #create a new dataframe where index is a datetime object and the value is the observation value, drop the
-            value = pd.to_numeric(df['value'], errors='coerce')
-            index = pd.to_datetime(df['date'])
-            df    = pd.DataFrame(value.values, index=index, columns=['value'])        
-            return df
-        except requests.exceptions.HTTPError as http_err:
-            print(f"HTTP error occurred: {http_err}")  # Python 3.6+
-            raise
-        except requests.exceptions.RequestException as req_err:
-            print(f"Request error occurred: {req_err}")
-            raise
+        return fetch_fred_observations_query(query)
+
+    def fetch_fred_series(
+        self,
+        series_ids,
+        start_date=None,
+        end_date=None,
+        max_workers=8,
+        on_error="raise",
+    ):
+        """Fetch a display-name-to-series-ID mapping concurrently from FRED."""
+        return fetch_fred_series_frame(
+            series_ids,
+            api_key=self.fred_api_key,
+            start_date=start_date,
+            end_date=end_date,
+            max_workers=max_workers,
+            on_error=on_error,
+        )
         
     def get_inflation_data(self):
         series_ids = {
@@ -121,7 +116,7 @@ class MacroDataClient:
             "CPI Owners' Equivalent Rent": "CUSR0000SEHC"
         }
     
-        return pd.concat([self.fetch_fred_json(self.base_url(series_id)).rename(columns={'value': name}) for name, series_id in series_ids.items()], axis=1)
+        return fetch_fred_series_frame(series_ids, api_key=self.fred_api_key)
  
     def get_interest_rate_data(self):
         series_ids = {
@@ -132,7 +127,7 @@ class MacroDataClient:
             "BAA Corporate Bond Yield": "DBAA"
         }
         
-        return pd.concat([self.fetch_fred_json(self.base_url(series_id)).rename(columns={'value': name}) for name, series_id in series_ids.items()], axis=1)
+        return fetch_fred_series_frame(series_ids, api_key=self.fred_api_key)
 
     def get_historical_treasury_yields(self, maturities=None, start_date=None, end_date=None, real=False):
         """
@@ -148,56 +143,13 @@ class MacroDataClient:
         Returns:
             pd.DataFrame: Treasury yield history indexed by date.
         """
-        nominal_series_ids = {
-            "1M": "DGS1MO",
-            "3M": "DGS3MO",
-            "6M": "DGS6MO",
-            "1Y": "DGS1",
-            "2Y": "DGS2",
-            "3Y": "DGS3",
-            "5Y": "DGS5",
-            "7Y": "DGS7",
-            "10Y": "DGS10",
-            "20Y": "DGS20",
-            "30Y": "DGS30",
-        }
-        real_series_ids = {
-            "5Y": "DFII5",
-            "7Y": "DFII7",
-            "10Y": "DFII10",
-            "20Y": "DFII20",
-            "30Y": "DFII30",
-        }
-
-        series_ids = real_series_ids if real else nominal_series_ids
-
-        if maturities is None:
-            selected_series = series_ids
-        else:
-            if isinstance(maturities, str):
-                maturities = [maturities]
-
-            normalized_maturities = [maturity.upper() for maturity in maturities]
-            unsupported = [maturity for maturity in normalized_maturities if maturity not in series_ids]
-            if unsupported:
-                available = ", ".join(series_ids.keys())
-                requested = ", ".join(unsupported)
-                raise ValueError(
-                    f"Unsupported treasury maturities: {requested}. Available maturities: {available}."
-                )
-
-            selected_series = {
-                maturity: series_ids[maturity]
-                for maturity in normalized_maturities
-            }
-
-        frames = [
-            self.fetch_fred_json(
-                self.base_url(series_id, start_date=start_date, end_date=end_date)
-            ).rename(columns={"value": maturity})
-            for maturity, series_id in selected_series.items()
-        ]
-        return pd.concat(frames, axis=1).sort_index()
+        return fetch_historical_treasury_yields(
+            maturities=maturities,
+            api_key=self.fred_api_key,
+            start_date=start_date,
+            end_date=end_date,
+            real=real,
+        )
     
     def get_gdp_data(self):
         series_ids = {
@@ -222,7 +174,7 @@ class MacroDataClient:
             "Real Net Exports": "NETEXC"
         }
         
-        return pd.concat([self.fetch_fred_json(self.base_url(series_id)).rename(columns={'value': name}) for name, series_id in series_ids.items()], axis=1)
+        return fetch_fred_series_frame(series_ids, api_key=self.fred_api_key)
 
     def get_recession_indicators(self):
         series_ids = {
@@ -231,7 +183,7 @@ class MacroDataClient:
             "Real-Time Sahm Rule": "SAHMREALTIME",
             "Markov Switching Smoothed Probability": "RECPROUSM156N"
         }
-        return pd.concat([self.fetch_fred_json(self.base_url(series_id)).rename(columns={'value': name}) for name, series_id in series_ids.items()], axis=1)
+        return fetch_fred_series_frame(series_ids, api_key=self.fred_api_key)
     
     def get_bond_data(self):
         ndl = self._require_nasdaq_data_link()
@@ -240,17 +192,31 @@ class MacroDataClient:
             'treasury yield curve rates (real)': ndl.get("USTREASURY/REALYIELD"),
             'investment grade corporate bond yield curve rates': ndl.get("USTREASURY/HQMYC"),
             'US High yield Option-Adjusted Spread': ndl.get("FRED/BAMLH0A0HYM2"),
-            'Treasury' : yf.Ticker('GOVT').history(period='max', interval='1d'),
-            'Investment Corporate Bonds' : yf.Ticker('LQD').history(period='max', interval='1d'),
-            'High yield Corporate Bonds' : yf.Ticker('HYG').history(period='max', interval='1d')
+            'Treasury' : fetch_history('GOVT', period='max', interval='1d'),
+            'Investment Corporate Bonds' : fetch_history('LQD', period='max', interval='1d'),
+            'High yield Corporate Bonds' : fetch_history('HYG', period='max', interval='1d')
         }
     
     def get_housing_market_data(self):
-        fred_reader = self._require_pandas_datareader()
         return {
-            'Building Permits': fred_reader.get_data_fred("PERMIT", start=self.start_date, end=self.end_date),
-            'Housing Starts': fred_reader.get_data_fred("HOUST", start=self.start_date, end=self.end_date),
-            'New Home Sales': fred_reader.get_data_fred("HSN1F", start=self.start_date, end=self.end_date)
+            'Building Permits': fetch_fred_series_frame(
+                {"PERMIT": "PERMIT"},
+                api_key=self.fred_api_key,
+                start_date=self.start_date,
+                end_date=self.end_date,
+            ),
+            'Housing Starts': fetch_fred_series_frame(
+                {"HOUST": "HOUST"},
+                api_key=self.fred_api_key,
+                start_date=self.start_date,
+                end_date=self.end_date,
+            ),
+            'New Home Sales': fetch_fred_series_frame(
+                {"HSN1F": "HSN1F"},
+                api_key=self.fred_api_key,
+                start_date=self.start_date,
+                end_date=self.end_date,
+            )
            # 'Existing Home Sales' : nasdaqdatalink.get("FRED/EXHOSLUSM495S"),
            # 'Case Shiller Home Price Index' : nasdaqdatalink.get("FRED/CSUSHPISA")
         }

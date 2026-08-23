@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-import yfinance as yf
+
+def _get_yfinance():
+    """Import yfinance only for benchmark loads that need it."""
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise ImportError("yfinance is required to load benchmark market data.") from exc
+    return yf
 
 
 def normalize_benchmark_tickers(benchmark_tickers, asset_ticker, *, include_asset=False):
@@ -32,6 +39,7 @@ def normalize_benchmark_tickers(benchmark_tickers, asset_ticker, *, include_asse
 
 def load_benchmark_data(benchmark_tickers, period, interval, helper):
     """Download benchmark frames and normalize their date indexes."""
+    yf = _get_yfinance()
     benchmark_frames = {}
     skipped = []
     for symbol in benchmark_tickers:

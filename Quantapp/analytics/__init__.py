@@ -1,57 +1,47 @@
 """Analytics and computation helpers."""
 
 try:
-    from .algorithm import Algorithm
+    from .metric import Algorithm, Metric
 except ModuleNotFoundError:  # Optional dependency path, e.g. investpy not installed.
     Algorithm = None
-from .close_analytics import CloseAnalytics
-from .cross_section_stats import CrossSectionStats
-from .feature_engineering import FeatureEngineering
+    Metric = None
 from .helper import Helper
-from .market_data_utils import MarketDataUtils
-from .models import Models
-from .momentum_analytics import MomentumAnalytics
-from .risk_relative_analytics import RiskRelativeAnalytics
-from .risk_distribution_analytics import RiskDistributionAnalytics
-from .ohlc_analytics import OHLCAnalytics
 from .rolling import Rolling, TimeSeriesAnalytics
 from .series_transforms import SeriesTransforms
+from .option_greeks import (
+    black_scholes_greeks,
+    black_scholes_price,
+    build_option_greek_sensitivity_frame,
+    build_option_greeks_frame,
+    summarize_option_greeks,
+)
 from .series_utils import (
     calculate_historical_var_metrics,
     calculate_max_drawdown,
+    calculate_rolling_recovery_time,
     calculate_textbook_rolling_max_drawdown,
-    calculate_window_metrics,
     calculate_zscore,
     gini_coefficient,
     zscore,
 )
-from .signal_labels import SignalLabels
-from .sequence_generator import SequenceGenerator
-from .time_features import TimeFeatures
 
 __all__ = [
     "Helper",
-    "MarketDataUtils",
-    "CloseAnalytics",
-    "OHLCAnalytics",
     "Rolling",
     "TimeSeriesAnalytics",
-    "TimeFeatures",
-    "FeatureEngineering",
-    "CrossSectionStats",
-    "MomentumAnalytics",
-    "RiskRelativeAnalytics",
-    "RiskDistributionAnalytics",
-    "SignalLabels",
     "SeriesTransforms",
-    "SequenceGenerator",
     "Algorithm",
-    "Models",
+    "Metric",
+    "black_scholes_greeks",
+    "black_scholes_price",
+    "build_option_greek_sensitivity_frame",
+    "build_option_greeks_frame",
     "calculate_zscore",
     "zscore",
     "calculate_historical_var_metrics",
     "calculate_max_drawdown",
+    "calculate_rolling_recovery_time",
     "calculate_textbook_rolling_max_drawdown",
     "gini_coefficient",
-    "calculate_window_metrics",
+    "summarize_option_greeks",
 ]

@@ -4,7 +4,64 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.stats import kurtosis, skew
+
+from . import compute
+from .metric import Metric
+
+_metric = Metric()
+
+
+def coerce_close_series(data, argument_name: str = "close_series") -> pd.Series:
+    """Return a clean close-price Series from a Series or OHLC DataFrame."""
+    if isinstance(data, pd.Series):
+        close = data
+    elif isinstance(data, pd.DataFrame):
+        if "Close" not in data.columns:
+            if argument_name == "close_series":
+                raise ValueError("DataFrame input must contain a 'Close' column.")
+            raise ValueError(f"{argument_name} DataFrame must contain a 'Close' column.")
+        close = data["Close"]
+    else:
+        if argument_name == "close_series":
+            raise TypeError("close_series must be a pandas Series or DataFrame with 'Close'.")
+        raise TypeError(f"{argument_name} must be a pandas Series or DataFrame.")
+
+    close = close.dropna()
+    if close.empty:
+        raise ValueError(f"{argument_name} is empty after dropping NaNs.")
+    return close.sort_index()
+
+
+def coerce_series(data, argument_name: str = "series", preferred_column: str | None = None) -> pd.Series:
+    """Coerce Series-like input to a Series, allowing one-column DataFrames."""
+    if isinstance(data, pd.Series):
+        return data
+
+    if isinstance(data, pd.DataFrame):
+        if preferred_column is not None and preferred_column in data.columns:
+            out = data[preferred_column]
+            if isinstance(out, pd.DataFrame):
+                return out.iloc[:, 0]
+            return out
+
+        if data.shape[1] == 1:
+            return data.iloc[:, 0]
+
+        raise TypeError(
+            f"{argument_name} must be a Series or single-column DataFrame. "
+            f"Received DataFrame with columns: {list(data.columns)}"
+        )
+
+    raise TypeError(f"{argument_name} must be a pandas Series.")
+
+
+def coerce_datetime_index(data):
+    """Return a copy with a naive, sorted DatetimeIndex."""
+    out = data.copy()
+    out.index = pd.to_datetime(out.index)
+    if getattr(out.index, "tz", None) is not None:
+        out.index = out.index.tz_localize(None)
+    return out.sort_index()
 
 
 def calculate_zscore(series: pd.Series) -> pd.Series:
@@ -27,16 +84,15 @@ def calculate_textbook_rolling_max_drawdown(price_series: pd.Series, window: int
     if window <= 0:
         raise ValueError("window must be a positive integer.")
 
-    def textbook_window_drawdown(window_values):
-        values = np.asarray(window_values, dtype=float)
-        if values.size == 0 or np.isnan(values).all():
-            return np.nan
+    return compute.rolling(price_series, metric=_metric.textbook_window_drawdown, window=window, dropna=False)
 
-        peaks = np.maximum.accumulate(values)
-        drawdowns = values / peaks - 1
-        return np.nanmin(drawdowns)
 
-    return price_series.rolling(window=window).apply(textbook_window_drawdown, raw=True)
+def calculate_rolling_recovery_time(price_series: pd.Series, window: int = 21) -> pd.Series:
+    """Rolling sessions from trough to recovered high inside each trailing window."""
+    if window <= 0:
+        raise ValueError("window must be a positive integer.")
+
+    return compute.rolling(price_series, metric=_metric.window_recovery_time, window=window, dropna=False)
 
 
 def gini_coefficient(array) -> float:
@@ -51,33 +107,6 @@ def gini_coefficient(array) -> float:
     if cumvals[-1] == 0:
         return 0.0
     return (n + 1 - 2 * np.sum(cumvals) / cumvals[-1]) / n
-
-
-def calculate_window_metrics(daily_returns: pd.Series, close_series: pd.Series, window: int):
-    """Compute rolling return bands, textbook max drawdown, and z-scored distribution metrics."""
-    max_drawdown_series = calculate_textbook_rolling_max_drawdown(close_series, window=window).dropna()
-    rolling_return_q10 = daily_returns.rolling(window).quantile(0.10).dropna()
-    rolling_return_q25 = daily_returns.rolling(window).quantile(0.25).dropna()
-    rolling_return_median = daily_returns.rolling(window).median().dropna()
-    rolling_return_q75 = daily_returns.rolling(window).quantile(0.75).dropna()
-    rolling_return_q90 = daily_returns.rolling(window).quantile(0.90).dropna()
-    rolling_skew = daily_returns.rolling(window).apply(lambda x: skew(x, bias=False), raw=False).dropna()
-    rolling_kurtosis = daily_returns.rolling(window).apply(
-        lambda x: kurtosis(x, fisher=True, bias=False), raw=False
-    ).dropna()
-    rolling_gini = daily_returns.rolling(window).apply(lambda x: gini_coefficient(x), raw=False).dropna()
-    return {
-        "daily_returns": daily_returns.copy(),
-        "return_q10": rolling_return_q10,
-        "return_q25": rolling_return_q25,
-        "return_median": rolling_return_median,
-        "return_q75": rolling_return_q75,
-        "return_q90": rolling_return_q90,
-        "max_drawdown": max_drawdown_series,
-        "skew_z": calculate_zscore(rolling_skew),
-        "kurtosis_z": calculate_zscore(rolling_kurtosis),
-        "gini_z": calculate_zscore(rolling_gini),
-    }
 
 
 def calculate_historical_var_metrics(daily_returns: pd.Series, window: int, alpha: float):

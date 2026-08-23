@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
-from io import StringIO
 
 import pandas as pd
-import requests
-import yfinance as yf
+
+from Quantapp.data.repositories.market_constituents_repository import (
+    get_market_constituent_data,
+    get_market_index_tables,
+)
+from Quantapp.data.sources.yfinance_history import Ticker, download_history
 
 class MarketDataClient:
     
@@ -26,114 +29,114 @@ class MarketDataClient:
             'U.S. Dollar Index': 'DX-Y.NYB'
         }
         return {
-            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            name: Ticker(ticker).history(period='max', interval='1d')
             for name, ticker in broad_market.items()
         }
     
     def get_major_equity_indices_data(self):
         return {
-            'S&P 500' : yf.Ticker('SPY').history(period='max', interval='1d'),
-            'NASDAQ 100' : yf.Ticker('QQQ').history(period='max', interval='1d'),
-            'Dow Jones Industrial Average' : yf.Ticker('DIA').history(period='max', interval='1d'),
-            'Russell 2000' : yf.Ticker('IWM').history(period='max', interval='1d')
+            'S&P 500' : Ticker('SPY').history(period='max', interval='1d'),
+            'NASDAQ 100' : Ticker('QQQ').history(period='max', interval='1d'),
+            'Dow Jones Industrial Average' : Ticker('DIA').history(period='max', interval='1d'),
+            'Russell 2000' : Ticker('IWM').history(period='max', interval='1d')
         }
         
     def get_market_cap_data(self):
         return {
-            'Large Cap' : yf.Ticker('IVV').history(period='max', interval='1d'),
-            'Mid Cap'   : yf.Ticker('IJH').history(period='max', interval='1d'),
-            'Small Cap' : yf.Ticker('IJR').history(period='max', interval='1d')
+            'Large Cap' : Ticker('IVV').history(period='max', interval='1d'),
+            'Mid Cap'   : Ticker('IJH').history(period='max', interval='1d'),
+            'Small Cap' : Ticker('IJR').history(period='max', interval='1d')
         }
         
     def get_sector_data(self):
         return {
-            'Healthcare' : yf.Ticker('XLV').history(period='max', interval='1d'),
-            'Communications' : yf.Ticker('XLC').history(period='max', interval='1d'),
-            'Technology' : yf.Ticker('XLK').history(period='max', interval='1d'),
-            'Financial' : yf.Ticker('XLF').history(period='max', interval='1d'),
-            'Industrial' : yf.Ticker('XLI').history(period='max', interval='1d'),
-            'Materials' : yf.Ticker('XLB').history(period='max', interval='1d'),
-            'Consumer Discretionary' : yf.Ticker('XLY').history(period='max', interval='1d'),
-            'Consumer Staples' : yf.Ticker('XLP').history(period='max', interval='1d'),
-            'Real Estate'      : yf.Ticker('XLRE').history(period='max', interval='1d'),
-            'Utilities'        :yf.Ticker('XLU').history(period='max', interval='1d'),
-            'Energy' : yf.Ticker('XLE').history(period='max', interval='1d')
+            'Healthcare' : Ticker('XLV').history(period='max', interval='1d'),
+            'Communications' : Ticker('XLC').history(period='max', interval='1d'),
+            'Technology' : Ticker('XLK').history(period='max', interval='1d'),
+            'Financial' : Ticker('XLF').history(period='max', interval='1d'),
+            'Industrial' : Ticker('XLI').history(period='max', interval='1d'),
+            'Materials' : Ticker('XLB').history(period='max', interval='1d'),
+            'Consumer Discretionary' : Ticker('XLY').history(period='max', interval='1d'),
+            'Consumer Staples' : Ticker('XLP').history(period='max', interval='1d'),
+            'Real Estate'      : Ticker('XLRE').history(period='max', interval='1d'),
+            'Utilities'        :Ticker('XLU').history(period='max', interval='1d'),
+            'Energy' : Ticker('XLE').history(period='max', interval='1d')
         }
         
     def get_commodity_data(self):
         return {
-            'Agriculture' :  yf.Ticker('DBA').history(period='max', interval='1d'),
-            'Energy'      :  yf.Ticker('DBE').history(period='max', interval='1d'),
-            'Base Metals' :  yf.Ticker('DBE').history(period='max', interval='1d'),
-            'Precious Metals': yf.Ticker('GLTR').history(period='max', interval='1d')
+            'Agriculture' :  Ticker('DBA').history(period='max', interval='1d'),
+            'Energy'      :  Ticker('DBE').history(period='max', interval='1d'),
+            'Base Metals' :  Ticker('DBE').history(period='max', interval='1d'),
+            'Precious Metals': Ticker('GLTR').history(period='max', interval='1d')
         }
         
     def get_international_data(self):    
         return {
-             'Emerging Market' : yf.Ticker('EEM').history(period='max', interval='1d'),
-             'Frontier Markets' : yf.Ticker('FM').history(period='max', interval='1d'),
+             'Emerging Market' : Ticker('EEM').history(period='max', interval='1d'),
+             'Frontier Markets' : Ticker('FM').history(period='max', interval='1d'),
         }
         
     def get_qualitative_factors(self):
         return {
-            'Buybacks': yf.Ticker('PKW').history(period='max', interval='1d'),
-            'Spin-Offs': yf.Ticker('CSD').history(period='max', interval='1d'),
-            'Hedgefunds': yf.Ticker('GURU').history(period='max', interval='1d'),
-            'IPOs': yf.Ticker('IPO').history(period='max', interval='1d'),
-            'Mergers & Acquisitions': yf.Ticker('MNA').history(period='max', interval='1d'),
-            'Quality': yf.Ticker('QUAL').history(period='max', interval='1d'),
-            'Private Equity': yf.Ticker('PSP').history(period='max', interval='1d'),
+            'Buybacks': Ticker('PKW').history(period='max', interval='1d'),
+            'Spin-Offs': Ticker('CSD').history(period='max', interval='1d'),
+            'Hedgefunds': Ticker('GURU').history(period='max', interval='1d'),
+            'IPOs': Ticker('IPO').history(period='max', interval='1d'),
+            'Mergers & Acquisitions': Ticker('MNA').history(period='max', interval='1d'),
+            'Quality': Ticker('QUAL').history(period='max', interval='1d'),
+            'Private Equity': Ticker('PSP').history(period='max', interval='1d'),
         }
         
     def get_factor_data(self):
         return {
-            'Growth' : yf.Ticker('SPYG').history(period='max', interval='1d'),
-            'Value' : yf.Ticker('VLUE').history(period='max', interval='1d'),
-            'Momentum' : yf.Ticker('MTUM').history(period='max', interval='1d'),
-            'Quality' : yf.Ticker('QUAL').history(period='max', interval='1d'),
-            'Market Capitalization' : yf.Ticker('SIZE').history(period='max', interval='1d'),
-            'Low Volatility' : yf.Ticker('USMV').history(period='max', interval='1d'),
-            'High Dividend' : yf.Ticker('VYM').history(period='max', interval='1d'),
+            'Growth' : Ticker('SPYG').history(period='max', interval='1d'),
+            'Value' : Ticker('VLUE').history(period='max', interval='1d'),
+            'Momentum' : Ticker('MTUM').history(period='max', interval='1d'),
+            'Quality' : Ticker('QUAL').history(period='max', interval='1d'),
+            'Market Capitalization' : Ticker('SIZE').history(period='max', interval='1d'),
+            'Low Volatility' : Ticker('USMV').history(period='max', interval='1d'),
+            'High Dividend' : Ticker('VYM').history(period='max', interval='1d'),
         }
         
     def get_beta_factors(self):
         return {
-            'Low Beta'   : yf.Ticker('SPLV').history(period='max', interval='1d'),
-            'High Beta'  : yf.Ticker('SPHB').history(period='max', interval='1d'),
+            'Low Beta'   : Ticker('SPLV').history(period='max', interval='1d'),
+            'High Beta'  : Ticker('SPHB').history(period='max', interval='1d'),
         }
     
     def get_dividend_data(self):
         return {
-            'High Yield' : yf.Ticker('VYM').history(period='max', interval='1d'),
-            'Low Yield' : yf.Ticker('DVY').history(period='max', interval='1d'),
-            'Dividend Growth' : yf.Ticker('DGRO').history(period='max', interval='1d'),
-            'Dividend Value' : yf.Ticker('SCHD').history(period='max', interval='1d'),
-            'Dividend Aristocrats' : yf.Ticker('NOBL').history(period='max', interval='1d'),
-            'Dividend Achievers' : yf.Ticker('PFM').history(period='max', interval='1d'),
-            'Dividend Kings' : yf.Ticker('KNGS').history(period='max', interval='1d'),
-            'Dividend Champions' : yf.Ticker('SDY').history(period='max', interval='1d'),
+            'High Yield' : Ticker('VYM').history(period='max', interval='1d'),
+            'Low Yield' : Ticker('DVY').history(period='max', interval='1d'),
+            'Dividend Growth' : Ticker('DGRO').history(period='max', interval='1d'),
+            'Dividend Value' : Ticker('SCHD').history(period='max', interval='1d'),
+            'Dividend Aristocrats' : Ticker('NOBL').history(period='max', interval='1d'),
+            'Dividend Achievers' : Ticker('PFM').history(period='max', interval='1d'),
+            'Dividend Kings' : Ticker('KNGS').history(period='max', interval='1d'),
+            'Dividend Champions' : Ticker('SDY').history(period='max', interval='1d'),
         }
    
     def get_size_vs_value_data(self):
         
         return {
-            'Large Cap Value': yf.Ticker('IVE').history(period='max', interval='1d'),
-            'Large Cap Growth': yf.Ticker('IVW').history(period='max', interval='1d'),
-            'Large Cap Core': yf.Ticker('IVV').history(period='max', interval='1d'),
-            'Mid Cap Value': yf.Ticker('IJJ').history(period='max', interval='1d'),
-            'Mid Cap Growth': yf.Ticker('IJK').history(period='max', interval='1d'),
-            'Mid Cap Core': yf.Ticker('IJH').history(period='max', interval='1d'),
-            'Small Cap Value': yf.Ticker('IJS').history(period='max', interval='1d'),
-            'Small Cap Growth': yf.Ticker('IJT').history(period='max', interval='1d'),
-            'Small Cap Core': yf.Ticker('IJS').history(period='max', interval='1d'),
+            'Large Cap Value': Ticker('IVE').history(period='max', interval='1d'),
+            'Large Cap Growth': Ticker('IVW').history(period='max', interval='1d'),
+            'Large Cap Core': Ticker('IVV').history(period='max', interval='1d'),
+            'Mid Cap Value': Ticker('IJJ').history(period='max', interval='1d'),
+            'Mid Cap Growth': Ticker('IJK').history(period='max', interval='1d'),
+            'Mid Cap Core': Ticker('IJH').history(period='max', interval='1d'),
+            'Small Cap Value': Ticker('IJS').history(period='max', interval='1d'),
+            'Small Cap Growth': Ticker('IJT').history(period='max', interval='1d'),
+            'Small Cap Core': Ticker('IJS').history(period='max', interval='1d'),
         }  
         
     def get_allocation_data(self):
         return {
-            'Growth' : yf.Ticker('AOR').history(period='max', interval='1d'),
-            'Moderate' : yf.Ticker('AOM').history(period='max', interval='1d'),
-            'Aggresive': yf.Ticker('AOA').history(period='max', interval='1d'),
-            'Conservative': yf.Ticker('AOK').history(period='max', interval='1d'),
+            'Growth' : Ticker('AOR').history(period='max', interval='1d'),
+            'Moderate' : Ticker('AOM').history(period='max', interval='1d'),
+            'Aggresive': Ticker('AOA').history(period='max', interval='1d'),
+            'Conservative': Ticker('AOK').history(period='max', interval='1d'),
         }
 
     def get_bond_data(self, type='bond market'):
@@ -247,7 +250,7 @@ class MarketDataClient:
                 "Solactive LSTA U.S. Leveraged Loans": "SRLN"
             }
         return {
-            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            name: Ticker(ticker).history(period='max', interval='1d')
             for name, ticker in bond_data.items()
         }
     
@@ -318,7 +321,7 @@ class MarketDataClient:
             raise ValueError(f"Unknown category: {category}")
 
         return {
-            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            name: Ticker(ticker).history(period='max', interval='1d')
             for name, ticker in forex_data.items()
         }
     
@@ -340,7 +343,7 @@ class MarketDataClient:
     def get_world_data(self):
         region_data = self._get_broad_region_map()
         return {
-            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            name: Ticker(ticker).history(period='max', interval='1d')
             for name, ticker in region_data.items()
         }
 
@@ -560,24 +563,24 @@ class MarketDataClient:
             region_data = self._get_broad_region_map()
 
         return {
-            name: yf.Ticker(ticker).history(period='max', interval='1d')
+            name: Ticker(ticker).history(period='max', interval='1d')
             for name, ticker in region_data.items()
         }
         
     def get_volatility_data(self):
         return {
-            'VIX (1 Month)': yf.Ticker('VIX').history(period='max', interval='1d'),
-            'VIX (6 Month)': yf.Ticker('VIXM').history(period='max', interval='1d'),
-            'SKEW': yf.Ticker('^SKEW').history(period='max', interval='1d'),
-            'MOVE': yf.Ticker('^MOVE').history(period='max', interval='1d'),
+            'VIX (1 Month)': Ticker('VIX').history(period='max', interval='1d'),
+            'VIX (6 Month)': Ticker('VIXM').history(period='max', interval='1d'),
+            'SKEW': Ticker('^SKEW').history(period='max', interval='1d'),
+            'MOVE': Ticker('^MOVE').history(period='max', interval='1d'),
         }
     
     def get_strategy_data(self):
         return {
-            'Active Investing': yf.Ticker('QAI').history(period='max', interval='1d'),
-            'Beta Rotation': yf.Ticker('BTAL').history(period='max', interval='1d'),
-            'Covered Calls': yf.Ticker('PBP').history(period='max', interval='1d'),
-            'Hedged'       : yf.Ticker('PHDG').history(period='max', interval='1d')
+            'Active Investing': Ticker('QAI').history(period='max', interval='1d'),
+            'Beta Rotation': Ticker('BTAL').history(period='max', interval='1d'),
+            'Covered Calls': Ticker('PBP').history(period='max', interval='1d'),
+            'Hedged'       : Ticker('PHDG').history(period='max', interval='1d')
         }
                   
     def get_market_assets(self):
@@ -654,136 +657,10 @@ class MarketDataClient:
 
         return market_assets
     def retrieve_market_tables(self):
-        def read_tables(url):
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            return pd.read_html(StringIO(response.text))
-
-        def find_table(tables, required_columns=None, column_prefixes=None, table_name="table"):
-            required_columns = required_columns or []
-            column_prefixes = column_prefixes or []
-
-            for table in tables:
-                table_columns = [str(column) for column in table.columns]
-                has_required_columns = all(column in table_columns for column in required_columns)
-                has_prefixed_columns = all(
-                    any(column.startswith(prefix) for column in table_columns)
-                    for prefix in column_prefixes
-                )
-
-                if has_required_columns and has_prefixed_columns:
-                    return table.copy()
-
-            expected_columns = required_columns + [f"{prefix}*" for prefix in column_prefixes]
-            raise ValueError(f"Could not find {table_name} with columns: {expected_columns}")
-
-        # URLs for the market data
-        sp500_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        dow_url = 'https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average'
-        nasdaq_url = 'https://en.wikipedia.org/wiki/NASDAQ-100'
-        russell_1000_url = 'https://en.wikipedia.org/wiki/Russell_1000_Index'
-        headers = {'User-Agent': 'Mozilla/5.0'}
-
-        sp500_tables = read_tables(sp500_url)
-        sp500_table = find_table(
-            sp500_tables,
-            required_columns=['Symbol', 'GICS Sector', 'GICS Sub-Industry'],
-            table_name='S&P 500 holdings table'
-        )
-        sp500_table = sp500_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
-        sp500_table = sp500_table.rename(columns={'GICS Sector': 'Sector', 'GICS Sub-Industry': 'Sub-Industry'})
-
-        # Retrieve NASDAQ 100 data
-        nasdaq_tables = read_tables(nasdaq_url)
-        try:
-            qqq_table = find_table(
-                nasdaq_tables,
-                required_columns=['Ticker', 'Company'],
-                column_prefixes=['ICB Industry', 'ICB Subsector'],
-                table_name='NASDAQ-100 holdings table'
-            )
-            nasdaq_sector_column = next(column for column in qqq_table.columns if str(column).startswith('ICB Industry'))
-            nasdaq_subsector_column = next(column for column in qqq_table.columns if str(column).startswith('ICB Subsector'))
-        except ValueError:
-            qqq_table = find_table(
-                nasdaq_tables,
-                required_columns=['Ticker', 'Company', 'ICB Sector', 'ICB Industry'],
-                table_name='NASDAQ-100 holdings table'
-            )
-            nasdaq_sector_column = 'ICB Sector'
-            nasdaq_subsector_column = 'ICB Industry'
-        qqq_table = qqq_table[['Ticker', 'Company', nasdaq_sector_column, nasdaq_subsector_column]]
-        qqq_table = qqq_table.rename(columns={'Ticker': 'Symbol', nasdaq_sector_column: 'Sector', nasdaq_subsector_column: 'Sub-Industry'})
-        
-        # Retrieve Dow Jones Industrial Average data
-        dow_tables = read_tables(dow_url)
-        try:
-            dia_table = find_table(
-                dow_tables,
-                required_columns=['Symbol', 'Sector'],
-                table_name='Dow Jones holdings table'
-            )
-            dia_sector_column = 'Sector'
-        except ValueError:
-            dia_table = find_table(
-                dow_tables,
-                required_columns=['Symbol', 'Industry'],
-                table_name='Dow Jones holdings table'
-            )
-            dia_sector_column = 'Industry'
-        dia_table = dia_table[['Symbol', dia_sector_column]]
-        dia_table = dia_table.rename(columns={dia_sector_column: 'Sector'})
-        dia_table = pd.merge(dia_table, sp500_table[['Symbol', 'Sub-Industry']], on='Symbol', how='left')
-
-        # Retrieve Russell 1000 data
-        russell_tables = read_tables(russell_1000_url)
-        russell_1000_table = find_table(
-            russell_tables,
-            required_columns=['Symbol', 'GICS Sector', 'GICS Sub-Industry'],
-            table_name='Russell 1000 holdings table'
-        )
-        russell_1000_table = russell_1000_table[['Symbol', 'GICS Sector', 'GICS Sub-Industry']]
-        russell_1000_table = russell_1000_table.rename(columns={'GICS Sector': 'Sector', 'GICS Sub-Industry': 'Sub-Industry'})
-
-        # Compile all tables into a dictionary
-        data_dict = {
-            "SP500_TABLE": sp500_table,
-            "NASDAQ_100_TABLE": qqq_table,
-            "DIA_TABLE": dia_table,
-            "Russell_1000_TABLE": russell_1000_table
-        }
-
-        return data_dict
+        return get_market_index_tables()
     
     def retrieve_market_data(self):
-        # Get the market tables
-        tables = self.retrieve_market_tables()
-
-        sp500_table = tables["SP500_TABLE"]
-        qqq_table = tables["NASDAQ_100_TABLE"]
-        dia_table = tables["DIA_TABLE"]
-        russell_1000_table = tables["Russell_1000_TABLE"]
-
-        # Retrieve all companies from each sector and store in dictionary
-        data_dict = {
-            "SP500": sp500_table,
-            "NASDAQ_100": qqq_table,
-            "DIA": dia_table,
-            "Russell_1000": russell_1000_table,
-            "Information Technology": sp500_table[sp500_table['Sector'] == 'Information Technology'],
-            "Financials": sp500_table[sp500_table['Sector'] == 'Financials'],
-            "Health Care": sp500_table[sp500_table['Sector'] == 'Health Care'],
-            "Industrials": sp500_table[sp500_table['Sector'] == 'Industrials'],
-            "Consumer Discretionary": sp500_table[sp500_table['Sector'] == 'Consumer Discretionary'],
-            "Energy": sp500_table[sp500_table['Sector'] == 'Energy'],
-            "Materials": sp500_table[sp500_table['Sector'] == 'Materials'],
-            "Communication Services": sp500_table[sp500_table['Sector'] == 'Communication Services'],
-            "Real Estate": sp500_table[sp500_table['Sector'] == 'Real Estate'],
-            "Consumer Staples": sp500_table[sp500_table['Sector'] == 'Consumer Staples'],
-            "Utilities": sp500_table[sp500_table['Sector'] == 'Utilities']
-        }
-
-        return data_dict
+        return get_market_constituent_data()
     
     def generate_series(self,tickers, columns=['Adj Close', 'Close', 'High', 'Low', 'Open', 'Volume'], period='10y', interval='1d'):
         """
@@ -806,7 +683,7 @@ class MarketDataClient:
 
         tickers = [ticker.replace('.', '-') for ticker in tickers]
         try:
-            df = yf.download(tickers, period=period, interval=interval, progress=False)
+            df = download_history(tickers, period=period, interval=interval, progress=False)
         except Exception as e:
             print(f"An error occurred while fetching data: {e}")
             return pd.DataFrame()
@@ -843,7 +720,7 @@ class MarketDataClient:
     
     def get_sector_info(ticker):
         try:
-            stock = yf.Ticker(ticker)
+            stock = Ticker(ticker)
             sector = stock.info.get('sector', 'N/A')
             sub_industry = stock.info.get('industry', 'N/A')
             return {'Ticker': ticker, 'Sector': sector, 'Sub-Industry': sub_industry}
@@ -854,8 +731,8 @@ class MarketDataClient:
     def fetch_ticker_info(self, ticker):
         info = self.get_sector_info(ticker)
         print(info)
-        print(yf.Ticker(ticker).info)
-        #market_cap = yf.Ticker(ticker).info.get('marketCap')
+        print(Ticker(ticker).info)
+        #market_cap = Ticker(ticker).info.get('marketCap')
         #return info['Sector'], info['Sub-Industry'], market_cap
 
     def get_market_caps(self,table):

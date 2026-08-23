@@ -1,6 +1,5 @@
-"""Model definitions."""
+"""Reusable modeling helpers."""
 
-from Quantapp.models.model import Model
+from Quantapp.models.factor_regression import FactorRegressionModel
 
-__all__ = ["Model"]
-
+__all__ = ["FactorRegressionModel"]

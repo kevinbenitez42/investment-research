@@ -1,12 +1,16 @@
 # Visualization Traces
 
-This folder is for reusable trace builders and trace bundles.
+This folder is for reusable, shared plotting primitives.
 
-Examples of good fits:
+Good fits:
 
-- reference lines
-- reusable overlays
-- repeated trace-group constructors
-- candlestick or benchmark trace bundles used in more than one view
+- generic line, bar, heatmap, or candlestick builders
+- shared price-axis helpers
+- low-level trace constructors reused by more than one view
 
-If a trace pattern is only used by one figure, it should usually stay in that view module.
+Not a good fit:
+
+- view-specific semantic traces that only exist for one figure
+- one-off wrappers whose only caller is a single view module
+
+If a trace pattern is only used by one figure, it should stay in that view module as a private helper.

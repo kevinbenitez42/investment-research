@@ -1,19 +1,5 @@
-import yfinance as yf
 import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import holidays
-from statsmodels.tsa.seasonal import STL
-from scipy.stats import entropy as scipy_entropy
-try:
-    import investpy
-except ModuleNotFoundError:  # Optional dependency for selected data workflows.
-    investpy = None
-import requests 
-from bs4 import BeautifulSoup
-import statsmodels.api as sm
-from statsmodels.tsa.stattools import adfuller, coint
+
 
 class Helper:
     def simplify_datetime_index(self,series):
@@ -50,17 +36,16 @@ class Helper:
         ticker_str,
         daily_frame,
         *,
-        intraday_period="60d",
-        intraday_interval="30m",
+        intraday_frame=None,
         session_timezone="America/New_York",
     ):
         """
         Build the Open/Close source used by trade-range style analytics.
 
         Equities keep the supplied daily bars. Futures keep their full daily history too,
-        but we attach NY cash-session overrides for the latest session so the current cone
-        can anchor off 09:30-16:00 ET data without collapsing the history panel to the
-        recent intraday download window.
+        but callers may attach NY cash-session intraday data for the latest session so
+        the current cone can anchor off 09:30-16:00 ET data without collapsing the history
+        panel to the recent intraday download window.
         """
         if not isinstance(daily_frame, pd.DataFrame):
             raise TypeError("daily_frame must be a pandas DataFrame.")
@@ -75,14 +60,11 @@ class Helper:
 
         base_frame.attrs["session_mode"] = "futures_daily_bar"
 
-        try:
-            intraday_frame = yf.Ticker(str(ticker_str)).history(
-                period=intraday_period,
-                interval=intraday_interval,
-            )
-        except Exception:
-            intraday_frame = pd.DataFrame()
-
+        if intraday_frame is None:
+            base_frame.attrs["session_mode"] = "futures_daily_bar_intraday_fallback"
+            return base_frame
+        if not isinstance(intraday_frame, pd.DataFrame):
+            raise TypeError("intraday_frame must be a pandas DataFrame when provided.")
         if intraday_frame.empty:
             base_frame.attrs["session_mode"] = "futures_daily_bar_intraday_fallback"
             return base_frame
@@ -133,65 +115,3 @@ class Helper:
         base_frame.attrs["current_session_date"] = pd.Timestamp(session_frame.index[-1])
         base_frame.attrs["trade_range_recent_session_count"] = int(len(session_frame))
         return base_frame
-    
-    def fill_missing_dates(self, data, freq='D', method='ffill'):
-        """
-        Fill missing dates in a Series or DataFrame, forward-filling missing values.
-
-        Parameters:
-            data (pd.Series or pd.DataFrame): Input data with a DateTimeIndex.
-            freq (str): Frequency for the new date index (default 'D' for daily).
-            method (str): Method for filling missing values (default 'ffill').
-
-        Returns:
-            pd.Series or pd.DataFrame: Data with missing dates filled and values forward-filled.
-        """
-        if not isinstance(data.index, pd.DatetimeIndex):
-            raise TypeError("Input must have a DatetimeIndex.")
-
-        date_index = pd.date_range(start=data.index[0], end=data.index[-1], freq=freq)
-        if isinstance(data, pd.Series):
-            filled = data.reindex(date_index)
-            filled = filled.fillna(method=method)
-            return filled
-        elif isinstance(data, pd.DataFrame):
-            filled = data.reindex(date_index)
-            filled = filled.fillna(method=method)
-            return filled
-        else:
-            raise TypeError("Input must be a pandas Series or DataFrame.")
-    
-    def monthly_to_daily(self,data):
-        dates = pd.date_range(data.index[0], data.index[-1], freq='D')
-        s_daily = data.reindex(dates, method='ffill')
-        return s_daily.fillna(0)
-    
-    def remove_weekends_and_holidays(df, country='US'):
-        """
-        Removes weekend and holiday rows from a DataFrame with a DateTime index.
-
-        Parameters:
-            df (pd.DataFrame): DataFrame with DateTime index.
-            country (str): Country code for holidays. Default is 'US'.
-
-        Returns:
-            pd.DataFrame: DataFrame without weekend and holiday data.
-        """
-        if not isinstance(df.index, pd.DatetimeIndex):
-            raise TypeError("DataFrame index must be a DateTimeIndex")
-
-        # Remove weekends
-        df_weekdays = df[df.index.dayofweek < 5]
-
-        # Get holidays
-        country_holidays = holidays.CountryHoliday(country)
-
-        # Remove holidays
-        df_clean = df_weekdays[~df_weekdays.index.normalize().isin(country_holidays)]
-
-        return df_clean
-    
-    def train_test_split(self, series, percent_split):
-        X = series.values
-        size = int(len(X) * percent_split)
-        y_train,y_test =X [0: size], X[size:len(X)]

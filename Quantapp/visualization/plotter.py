@@ -1,11 +1,7 @@
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import plotly.express as px
-#import Quantapps Computation libarary
-from Quantapp.analytics.cross_section_stats import CrossSectionStats
-from Quantapp.analytics.rolling import Rolling
 import pandas as pd
-import yfinance as yf
 from statsmodels.tsa.stattools import coint
 from IPython.display import display
 from concurrent.futures import ThreadPoolExecutor
@@ -20,11 +16,34 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import copy
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from Quantapp.data.market_data_client import MarketDataClient
 
-rolling = Rolling()
-cross_section_stats = CrossSectionStats()
+
+def _calculate_percentage_drop(data, windows=(14,)):
+    if isinstance(windows, (int, np.integer)):
+        windows = [int(windows)]
+    elif isinstance(windows, Iterable) and not isinstance(windows, (str, bytes)):
+        windows = [int(window) for window in windows]
+    else:
+        raise ValueError("windows must be an integer or an iterable of integers")
+    if not windows:
+        raise ValueError("windows must contain at least one positive integer")
+    if any(window <= 0 for window in windows):
+        raise ValueError("windows must contain positive integers")
+    if "Close" not in data.columns:
+        raise ValueError("The DataFrame must contain a 'Close' column.")
+
+    ticker_copy = data.copy()
+    single_window = len(windows) == 1
+    for window in windows:
+        highest_high = ticker_copy["Close"].rolling(window=window, min_periods=1).max()
+        highest_high_col = "HighestHigh" if single_window else f"HighestHigh_{window}"
+        percentage_drop_col = "PercentageDrop" if single_window else f"PercentageDrop_{window}"
+        ticker_copy[highest_high_col] = highest_high
+        ticker_copy[percentage_drop_col] = -((highest_high - ticker_copy["Close"]) / highest_high) * 100
+    return ticker_copy
+
 
 class Plotter:
     def __init__(self):
@@ -638,7 +657,7 @@ class Plotter:
         annotation_map = {}
 
         for window in window_list:
-            percentage_drop = rolling.calculate_percentage_drop(plot_data, windows=window)["PercentageDrop"].dropna()
+            percentage_drop = _calculate_percentage_drop(plot_data, windows=window)["PercentageDrop"].dropna()
             visible_drop = percentage_drop.tail(display_days) if display_days is not None else percentage_drop
             mean_percentage_drop = percentage_drop.mean()
             std_dev = percentage_drop.std()
@@ -898,7 +917,7 @@ class Plotter:
         ticker_data = ticker_data[ticker_data.index.dayofweek < 5]
         holidays = pd.to_datetime(['2023-01-01', '2023-12-25'])  # Add more holidays as needed
         ticker_data = ticker_data[~ticker_data.index.isin(holidays)]
-        ticker_data = rolling.calculate_percentage_drop(ticker_data, windows=drop_window)
+        ticker_data = _calculate_percentage_drop(ticker_data, windows=drop_window)
         mean_drop = ticker_data['PercentageDrop'].mean()
         std_drop = ticker_data['PercentageDrop'].std()
     
@@ -1431,54 +1450,213 @@ class Plotter:
             raise ValueError("Invalid frequency. Choose 'daily' or 'weekly'.")
     
     def plot_z_score_combined(self, z_score_combined):
-        # Define the columns for the dropdown options
-        columns = z_score_combined.columns.tolist()
+        company_info_order = [
+            'Capitalization',
+            'Market Cap',
+            'Sector',
+            'Industry Group',
+            'Industry',
+            'Sub-Industry',
+        ]
+        company_info_columns = set(company_info_order)
+
+        def metric_window_sort_key(column_name):
+            first_token = str(column_name).split(maxsplit=1)[0]
+            try:
+                return int(first_token)
+            except ValueError:
+                return 9999
+
+        original_columns = z_score_combined.columns.tolist()
+        grouped_column_names = set()
+
+        def select_columns(predicate, sort_by_window=True):
+            selected = [
+                column for column in original_columns
+                if column not in grouped_column_names and predicate(column)
+            ]
+            grouped_column_names.update(selected)
+            if sort_by_window:
+                return sorted(selected, key=lambda column: (metric_window_sort_key(column), original_columns.index(column)))
+            return selected
+
+        ordered_company_info_columns = [
+            column for column in company_info_order
+            if column in original_columns
+        ]
+        grouped_column_names.update(ordered_company_info_columns)
+        sortino_columns = select_columns(
+            lambda column: (
+                "Sortino Ratio" in column
+                and "Benchmark Minus" not in column
+                and "Sector Minus" not in column
+            )
+        )
+        benchmark_minus_columns = select_columns(
+            lambda column: "Benchmark Minus" in column and "Sortino Ratio" in column
+        )
+        sector_minus_columns = select_columns(
+            lambda column: "Sector Minus" in column and "Sortino Ratio" in column
+        )
+        compounding_efficiency_columns = select_columns(lambda column: "Compounding Efficiency" in column)
+        volatility_drag_columns = select_columns(lambda column: "Volatility Drag" in column)
+        correlation_columns = select_columns(lambda column: "Correlation" in column, sort_by_window=False)
+        default_columns = [
+            column for column in original_columns
+            if column not in grouped_column_names
+        ]
+        columns = (
+            ordered_company_info_columns
+            + sortino_columns
+            + benchmark_minus_columns
+            + sector_minus_columns
+            + compounding_efficiency_columns
+            + volatility_drag_columns
+            + correlation_columns
+            + default_columns
+        )
+        z_score_combined = z_score_combined.reindex(columns=columns)
         
         # Create the initial figure with the data sorted by the first column
         fig = go.Figure()
         
         # Add the initial table trace (sorted by first column)
         sorted_df = z_score_combined.sort_values(by=columns[0], ascending=True)
+
+        def get_header_color(column_name):
+            if column_name == 'Ticker':
+                return '#203040'
+            if column_name in company_info_columns:
+                return '#334155'
+            if "Correlation" in column_name:
+                return '#4338CA'
+            if "Compounding Efficiency" in column_name:
+                return '#3F6212'
+            if "Volatility Drag" in column_name:
+                return '#86198F'
+            if "Benchmark Minus" in column_name:
+                return '#92400E'
+            if "Sector Minus" in column_name:
+                return '#A16207'
+            if "Sortino Ratio" in column_name:
+                return '#0E7490'
+            return '#203040'
+
+        header_values = ['Ticker'] + columns
+        header_fill_colors = [get_header_color('Ticker')] + [
+            get_header_color(column)
+            for column in columns
+        ]
+
+        market_cap_values = (
+            pd.to_numeric(z_score_combined['Market Cap'], errors='coerce')
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+            if 'Market Cap' in z_score_combined.columns
+            else pd.Series(dtype=float)
+        )
+        market_cap_quantiles = (
+            market_cap_values.quantile([0.2, 0.4, 0.6, 0.8])
+            if not market_cap_values.empty
+            else pd.Series(dtype=float)
+        )
+        market_cap_quantile_colors = [
+            '#1F2937',
+            '#1E3A8A',
+            '#0F766E',
+            '#4D7C0F',
+            '#A16207',
+        ]
+
+        def get_market_cap_color(numeric_value):
+            if market_cap_values.empty:
+                return '#1f1f1f'
+            if market_cap_values.nunique(dropna=True) < 2:
+                return '#334155'
+            if numeric_value <= market_cap_quantiles.loc[0.2]:
+                return market_cap_quantile_colors[0]
+            if numeric_value <= market_cap_quantiles.loc[0.4]:
+                return market_cap_quantile_colors[1]
+            if numeric_value <= market_cap_quantiles.loc[0.6]:
+                return market_cap_quantile_colors[2]
+            if numeric_value <= market_cap_quantiles.loc[0.8]:
+                return market_cap_quantile_colors[3]
+            return market_cap_quantile_colors[4]
         
-        # Define a function to determine cell color based on z-score value and column type
+        # Define a function to determine cell color based on score value and column type.
         def get_cell_color(value, column_name):
             if pd.isna(value):
                 return '#1f1f1f'
 
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                return '#1f1f1f'
+
+            if column_name == 'Market Cap':
+                return get_market_cap_color(numeric_value)
+
             if "Correlation" in column_name:
                 return '#1f1f1f'
-            
-            # Check if this is a "Benchmark Minus ETF" column (inverse coloring logic)
-            if "Benchmark Minus ETF" in column_name:
-                # For benchmark minus ETF columns: green for above 1, red for below -0.5
-                if value > 1:
+
+            if "Compounding Efficiency" in column_name and "MAD Score" in column_name:
+                if numeric_value > 0.5:
+                    return 'lightcoral'
+                elif numeric_value < -1:
                     return 'lightgreen'
-                elif value < -0.5:
+                else:
+                    return '#1f1f1f'
+
+            if "Volatility Drag" in column_name and "MAD Score" in column_name:
+                if numeric_value > 1:
+                    return 'lightgreen'
+                elif numeric_value < -0.5:
+                    return 'lightcoral'
+                else:
+                    return '#1f1f1f'
+
+            if "z score" not in column_name.lower() and "z-score" not in column_name.lower():
+                return '#1f1f1f'
+            
+            # Invert coloring for benchmark-minus columns: high means the benchmark is outperforming.
+            if "Benchmark Minus" in column_name or "Sector Minus" in column_name:
+                if numeric_value > 1:
+                    return 'lightgreen'
+                elif numeric_value < -0.5:
                     return 'lightcoral'
                 else:
                     return '#1f1f1f'
             else:
                 # For regular sortino columns: red for above 1, green for below -0.5
-                if value > 1:
+                if numeric_value > 1:
                     return 'lightcoral'
-                elif value < -0.5:
+                elif numeric_value < -0.5:
                     return 'lightgreen'
                 else:
                     return '#1f1f1f'
+
+        def format_cell_value(value, column_name):
+            if pd.isna(value):
+                return 'N/A'
+            if isinstance(value, (int, float, np.integer, np.floating)) and 'Market Cap' in column_name:
+                return f'{value:,.0f}'
+            if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+                return f'{value:.2f}'
+            return str(value)
 
         def get_display_values(df):
             return [
                 df.index.tolist(),
                 *[
-                    ['N/A' if pd.isna(value) else f'{value:.2f}' for value in df[col]]
+                    [format_cell_value(value, col) for value in df[col]]
                     for col in columns
-                ]
+                ],
             ]
         
         table = go.Table(
             header=dict(
-                values=['Ticker'] + columns,
-                fill_color='#203040',
+                values=header_values,
+                fill_color=header_fill_colors,
                 align='center',
                 font=dict(size=12, color='white')
             ),
@@ -1487,7 +1665,7 @@ class Plotter:
                 fill_color=[
                     '#2b2b2b',  # Ticker column color
                     # For each data column, color cells based on value and column name
-                    *[[get_cell_color(val, col) for val in sorted_df[col]] for col in columns]
+                    *[[get_cell_color(val, col) for val in sorted_df[col]] for col in columns],
                 ],
                 align='center',
                 font=dict(color='white')
@@ -1499,22 +1677,25 @@ class Plotter:
         # Create dropdown menu options for sorting
         buttons = []
         
-        # Add buttons for each column (ascending only)
+        # Add buttons for each column. Market cap and volatility drag read more naturally largest-to-smallest.
         for i, col in enumerate(columns):
+            sort_ascending = False if col == 'Market Cap' or 'Volatility Drag' in col else True
+            sorted_for_column = z_score_combined.sort_values(by=col, ascending=sort_ascending)
+            sort_label = 'Descending' if not sort_ascending else 'Ascending'
             buttons.append(dict(
                 args=[{
                     'cells': {
-                        'values': get_display_values(z_score_combined.sort_values(by=col, ascending=True)),
+                        'values': get_display_values(sorted_for_column),
                         'fill': {
                             'color': [
                                 '#2b2b2b',  # Ticker column color
                                 # For each data column, color cells based on value and column name
-                                *[[get_cell_color(val, c) for val in z_score_combined.sort_values(by=col, ascending=True)[c]] for c in columns]
+                                *[[get_cell_color(val, c) for val in sorted_for_column[c]] for c in columns],
                             ]
                         }
                     }
                 }],
-                label=f"{col} (Ascending)",
+                label=f"{col} ({sort_label})",
                 method="update"
             ))
         
@@ -1540,14 +1721,38 @@ class Plotter:
         
         # Add a color legend annotation with updated descriptions
         legend_text = (
-            "Color coding for Asset Sortino Ratio:<br>" +
-            "<span style='color:lightcoral'>â– </span> z > 1: Significantly above average (potential overvaluation)<br>" +
-            "<span style='color:lightgreen'>â– </span> z < -0.5: Significantly below average (potential undervaluation)<br>" +
-            "<br>Color coding for Benchmark Minus ETF:<br>" +
-            "<span style='color:lightgreen'>â– </span> z > 1: ETF underperforming benchmark (potential buying opportunity)<br>" +
-            "<span style='color:lightcoral'>â– </span> z < -0.5: ETF outperforming benchmark (potentially overvalued)<br>" 
+            "Color coding for Asset Sortino Ratio:<br>"
+            "<span style='color:lightcoral'>red</span> z > 1: Significantly above average (potential overvaluation)<br>"
+            "<span style='color:lightgreen'>green</span> z < -0.5: Significantly below average (potential undervaluation)<br>"
+            "<br>Color coding for Benchmark Minus Asset:<br>"
+            "<span style='color:lightgreen'>green</span> z > 1: asset underperforming benchmark (potential buying opportunity)<br>"
+            "<span style='color:lightcoral'>red</span> z < -0.5: asset outperforming benchmark (potentially overvalued)<br>"
         )
-        
+        if 'Market Cap' in columns:
+            legend_text += (
+                "<br>Color coding for Market Cap:<br>"
+                "Cells use size quintiles from smallest to largest market cap<br>"
+            )
+        if any("Sector Minus" in col and "Sortino Ratio" in col for col in columns):
+            legend_text += (
+                "<br>Color coding for Sector Minus Stock:<br>"
+                "<span style='color:lightgreen'>green</span> z > 1: stock underperforming sector (potential buying opportunity)<br>"
+                "<span style='color:lightcoral'>red</span> z < -0.5: stock outperforming sector (potentially overvalued)<br>"
+            )
+
+        if any("Compounding Efficiency" in col and "MAD Score" in col for col in columns):
+            legend_text += (
+                "<br>Color coding for Compounding Efficiency MAD Score:<br>"
+                "<span style='color:lightcoral'>red</span> MAD > 0.5: efficient compounding zone<br>"
+                "<span style='color:lightgreen'>green</span> MAD < -1: poor compounding zone<br>"
+            )
+        if any("Volatility Drag" in col and "MAD Score" in col for col in columns):
+            legend_text += (
+                "<br>Color coding for Volatility Drag MAD Score:<br>"
+                "<span style='color:lightgreen'>green</span> MAD > 1: high drag zone<br>"
+                "<span style='color:lightcoral'>red</span> MAD < -0.5: low drag zone<br>"
+            )
+
         fig.add_annotation(
             text=legend_text,
             showarrow=False,
@@ -2031,360 +2236,3 @@ class Plotter:
         
         return fig
     
-    def plot_etf_correlation_cointegration(self,etf_dataframes):
-        """
-        Plots interactive monthly correlation and cointegration charts for ETF dataframes.
-        """
-        import numpy as np
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-
-        # Create monthly resampled ETF dataframes
-        etf_dataframes_monthly = {key: value.resample('M').last() for key, value in etf_dataframes.items()}
-
-        # Create correlation matrices for each ETF dataframe using monthly data
-        etf_dataframes_correlation_matrices = {key: np.log(value).diff().dropna().corr() for key, value in etf_dataframes_monthly.items()}
-
-        # Use the first key as the default
-        first_key = list(etf_dataframes_correlation_matrices.keys())[0]
-        first_df = etf_dataframes_monthly[first_key]
-        first_matrix = etf_dataframes_correlation_matrices[first_key]
-
-        # Get sorted correlations
-        pair_names, pair_corrs = cross_section_stats.get_sorted_correlations(first_matrix)
-        pair_names = list(pair_names)  # Convert to list for reuse
-
-        # Get cointegration p-values for the same pairs in same order
-        coint_pair_names, coint_p_values = cross_section_stats.get_cointegration_pvals(first_df, pair_names)
-
-        # Convert p-values to -log10(p) for better visualization
-        log_p_values = [-np.log10(p) if p > 0 else 15 for p in coint_p_values] if coint_p_values else []
-
-        # Create subplots: heatmap on left, correlation and cointegration bar charts on right
-        fig = make_subplots(
-            rows=2,
-            cols=2,
-            column_widths=[0.5, 0.5],
-            row_heights=[0.5, 0.5],
-            specs=[[{"rowspan": 2}, {}], 
-                [None, {}]],
-            vertical_spacing=0.1,
-            horizontal_spacing=0.05,
-            subplot_titles=('Monthly Correlation Matrix', 'Monthly Sorted Pairwise Correlations', 'Monthly Cointegration Test (-log10 p-value)')
-        )
-
-        # Add heatmap trace on left side (spanning both rows)
-        heatmap = go.Heatmap(
-            z=first_matrix.values,
-            x=first_matrix.columns,
-            y=first_matrix.index,
-            colorscale='RdBu_r',
-            zmid=0,
-            colorbar=dict(title='Correlation', y=0.5, len=0.85)
-        )
-        fig.add_trace(heatmap, row=1, col=1)
-
-        # Add correlation bar chart on top right
-        bar = go.Bar(
-            x=pair_names,
-            y=pair_corrs,
-            marker=dict(
-                color=pair_corrs,
-                colorscale='RdBu_r',
-                showscale=False
-            )
-        )
-        fig.add_trace(bar, row=1, col=2)
-
-        # Add cointegration bar chart on bottom right
-        if coint_pair_names and log_p_values:
-            coint_bar = go.Bar(
-                x=coint_pair_names,
-                y=log_p_values,
-                marker=dict(
-                    color=log_p_values,
-                    colorscale='Viridis',
-                    colorbar=dict(title='-log10(p)', x=1.15, y=0.25, len=0.4)
-                )
-            )
-            fig.add_trace(coint_bar, row=2, col=2)
-
-        # Add a horizontal line at .05 for cointegration
-        fig.add_hline(y=-np.log10(0.05), line_dash='dash', line_color='red', row=2, col=2)
-
-        # Create dropdown menu buttons
-        buttons = []
-        for key in etf_dataframes_correlation_matrices.keys():
-            matrix = etf_dataframes_correlation_matrices[key]
-            df = etf_dataframes_monthly[key]
-            pair_names, pair_corrs = cross_section_stats.get_sorted_correlations(matrix)
-            pair_names_list = list(pair_names)
-            coint_pair_names, coint_p_values = cross_section_stats.get_cointegration_pvals(df, pair_names_list)
-            log_p_values = [-np.log10(p) if p > 0 else 15 for p in coint_p_values] if coint_p_values else []
-
-            buttons.append(
-                dict(
-                    method='update',
-                    label=key,
-                    args=[{
-                        'z': [matrix.values, None, None],
-                        'x': [matrix.columns, pair_names_list, coint_pair_names],
-                        'y': [matrix.index, pair_corrs, log_p_values],
-                        'marker.color': [None, pair_corrs, log_p_values]
-                    }]
-                )
-            )
-
-        # Update layout
-        fig.update_layout(
-            title='ETF Analysis: Monthly Correlation and Cointegration',
-            updatemenus=[{
-                'buttons': buttons,
-                'direction': 'down',
-                'showactive': True,
-                'x': 0.1,
-                'y': 1.15,
-                'xanchor': 'left',
-                'yanchor': 'top'
-            }],
-            height=900,
-        )
-
-        # Format x-axes
-        fig.update_xaxes(tickangle=90, tickfont=dict(size=8), row=1, col=2)
-        fig.update_xaxes(tickangle=90, tickfont=dict(size=8), row=2, col=2)
-
-        # Add axis titles
-        fig.update_yaxes(title='Correlation', row=1, col=2)
-        fig.update_yaxes(title='-log10(p-value)', row=2, col=2)
-
-        # Show the figure
-        fig.show()
-    
-    def plot_rolling_regression(self, rolling_results, ticker_str, factor_returns, show=True):
-        # Plot the alpha
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=rolling_results.index,
-            y=rolling_results['alpha'],
-            mode='lines',
-            name='Alpha'
-        ))
-        # Add a horizontal line at 0
-        fig.add_shape(
-            type="line",
-            x0=rolling_results.index[0],
-            y0=0,
-            x1=rolling_results.index[-1],
-            y1=0,
-            line=dict(
-                color="white",
-                width=1,
-                dash="dash"
-            )
-        )
-        
-        # Add a horizontal line for the mean of alpha
-        mean_alpha = rolling_results['alpha'].mean()
-        std_alpha = rolling_results['alpha'].std()
-        fig.add_hline(
-            y=mean_alpha,
-            line_color="white",
-            line_dash="dot",
-            annotation_text=f"Mean: {mean_alpha:.2f}",
-            annotation_position="bottom right"
-        )
-        
-        # Add horizontal lines for Â±1, Â±1.5, Â±2, Â±3 standard deviations from the mean
-        for i in [1, 1.5, 2, 3]:
-            fig.add_hline(
-                y=mean_alpha + i * std_alpha,
-                line_color="red",
-                line_dash="dash",
-                annotation_text=f"+{i}Ïƒ: {mean_alpha + i * std_alpha:.2f}",
-                annotation_position="top right"
-            )
-            fig.add_hline(
-                y=mean_alpha - i * std_alpha,
-                line_color="green",
-                line_dash="dash",
-                annotation_text=f"-{i}Ïƒ: {mean_alpha - i * std_alpha:.2f}",
-                annotation_position="bottom right"
-            )
-        
-        fig.update_layout(
-            title=f'{ticker_str} Rolling Alpha',
-            xaxis_title='Date',
-            yaxis_title='Alpha',
-            template='plotly_dark',
-            height=600,
-            xaxis=dict(
-                rangeslider=dict(visible=False),
-                tickangle=-45,
-                showgrid=True,
-                zeroline=False
-            )
-        )
-        alpha_fig = fig
-        if show:
-            alpha_fig.show()
-        # Create subplots: one row per factor
-        # Exclude the 'RF' column so that we only plot factor betas (e.g., Mkt-RF, SMB, HML)
-        factors_to_plot = [factor for factor in factor_returns.columns if factor != "RF"]
-        num_factors = len(factors_to_plot)
-
-        # Create subplots for each factor beta
-        fig = make_subplots(
-            rows=num_factors,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.04,
-            subplot_titles=[f"{factor} Beta" for factor in factors_to_plot]
-        )
-
-        # Add each beta trace along with its horizontal baseline:
-        for i, factor in enumerate(factors_to_plot, start=1):
-            fig.add_trace(
-                go.Scatter(
-                    x=rolling_results.index,
-                    y=rolling_results[f'{factor}_beta'],
-                    mode='lines',
-                    name=f'{factor} Beta'
-                ),
-                row=i,
-                col=1
-            )
-            baseline = 1 if factor == "Mkt-RF" else 0
-            fig.add_hline(
-                y=baseline,
-                row=i,
-                col=1,
-                line=dict(color="white", dash="dash"),
-                annotation_text=f"Baseline: {baseline}",
-                annotation_position="bottom right"
-            )
-
-        beta_row_height = 220
-        beta_height = min(max(520, beta_row_height * max(num_factors, 1) + 80), 1200)
-
-        fig.update_layout(
-            title=f'{ticker_str} Rolling Betas',
-            template='plotly_dark',
-            height=beta_height,
-            showlegend=False
-        )
-        beta_fig = fig
-        if show:
-            beta_fig.show()
-        # Plot the R-squared and adjusted R-squared
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=rolling_results.index,
-            y=rolling_results['r_squared'],
-            mode='lines',
-            name='R-Squared'
-        ))
-        fig.add_trace(go.Scatter(
-            x=rolling_results.index,
-            y=rolling_results['adj_r_squared'],
-            mode='lines',
-            name='Adjusted R-Squared'
-        ))
-        
-        #add a horizontal line at mean of the r-squared
-        mean_r_squared = rolling_results['r_squared'].mean()
-        fig.add_hline(
-            y=mean_r_squared,
-            line_color="white",
-            line_dash="dot",
-            annotation_text=f"Mean: {mean_r_squared:.2f}",
-            annotation_position="bottom right"
-        )
-        
-        #add a horizontal line at 0
-        fig.add_shape(
-            type="line",
-            x0=rolling_results.index[0],
-            y0=0,
-            x1=rolling_results.index[-1],
-            y1=0,
-            line=dict(
-                color="white",
-                width=1,
-                dash="dash"
-            )
-        )
-        
-        fig.update_layout(
-            title=f'{ticker_str} Rolling R-Squared',
-            xaxis_title='Date',
-            yaxis_title='R-Squared',
-            template='plotly_dark',
-            height=600,
-            xaxis=dict(
-                rangeslider=dict(visible=False),
-                tickangle=-45,
-                showgrid=True,
-                zeroline=False
-            )
-        )
-        rsquared_fig = fig
-        if show:
-            rsquared_fig.show()
-
-        return {
-            "alpha": alpha_fig,
-            "betas": beta_fig,
-            "r_squared": rsquared_fig,
-        }
-
-    def plot_idiosyncratic_risk(
-        self,
-        rolling_results,
-        ticker_str,
-        column="idio_vol_annualized",
-        template="plotly_white",
-        show=True,
-    ):
-        """
-        Plot rolling idiosyncratic risk from regression results.
-
-        Parameters:
-            rolling_results (pd.DataFrame): Output from rolling regression including idiosyncratic volatility columns.
-            ticker_str (str): Asset ticker for labeling.
-            column (str): Column to plot ('idio_vol_annualized' or 'idio_vol_daily').
-            template (str): Plotly template.
-        """
-        if column not in rolling_results.columns:
-            raise ValueError(f"Column '{column}' not found in rolling_results.")
-
-        window_used = rolling_results.attrs.get("window_used")
-        aligned_start = rolling_results.attrs.get("aligned_start")
-        if window_used is not None and aligned_start is not None:
-            title = f"{ticker_str}: Rolling Idiosyncratic Risk ({window_used}-day window, start {aligned_start})"
-        else:
-            title = f"{ticker_str}: Rolling Idiosyncratic Risk"
-
-        fig = make_subplots(rows=1, cols=1)
-        fig.add_trace(
-            go.Scatter(
-                x=rolling_results.index,
-                y=rolling_results[column],
-                mode="lines",
-                name=column,
-                line=dict(color="firebrick", width=2),
-            ),
-            row=1,
-            col=1,
-        )
-        fig.update_layout(
-            title=title,
-            xaxis_title="Date",
-            yaxis_title="Volatility",
-            template=template,
-            legend=dict(x=0.01, y=0.99),
-        )
-        if show:
-            fig.show()
-
-        return fig
