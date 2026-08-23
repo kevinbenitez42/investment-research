@@ -214,7 +214,14 @@ def _median_stems(period_median: pd.Series) -> tuple[list, list]:
     return stem_x, stem_y
 
 
-def _add_panel_traces(fig: go.Figure, panel: _SeasonalityPanel, *, row: int, as_of: pd.Timestamp) -> None:
+def _add_panel_traces(
+    fig: go.Figure,
+    panel: _SeasonalityPanel,
+    *,
+    row: int,
+    as_of: pd.Timestamp,
+    metric_label: str,
+) -> None:
     showlegend = row == 1
     if panel.period_mean.empty:
         fig.add_annotation(
@@ -233,7 +240,7 @@ def _add_panel_traces(fig: go.Figure, panel: _SeasonalityPanel, *, row: int, as_
         go.Bar(
             x=panel.period_mean.index,
             y=panel.period_mean.values,
-            name="Mean Return",
+            name=f"Mean {metric_label}",
             marker_color=_bar_colors(panel),
             hovertemplate="Mean: %{y:.4f}<extra></extra>",
             legendgroup="mean",
@@ -263,7 +270,7 @@ def _add_panel_traces(fig: go.Figure, panel: _SeasonalityPanel, *, row: int, as_
             x=panel.period_median.index,
             y=panel.period_median.values,
             mode="markers",
-            name="Median Return",
+            name=f"Median {metric_label}",
             marker=dict(size=8, color=MEDIAN_COLOR),
             hovertemplate="Median: %{y:.4f}<extra></extra>",
             legendgroup="median",
@@ -280,7 +287,7 @@ def _add_panel_traces(fig: go.Figure, panel: _SeasonalityPanel, *, row: int, as_
                 x=current_returns.index,
                 y=current_returns.values,
                 mode="lines+markers",
-                name=f"{as_of.year} Return",
+                name=f"{as_of.year} {metric_label}",
                 line=dict(color=CURRENT_YEAR_COLOR, width=2),
                 marker=dict(size=8, color=CURRENT_YEAR_COLOR, symbol="diamond"),
                 hovertemplate="Current Year: %{y:.4f}<extra></extra>",
@@ -308,8 +315,10 @@ def plot_seasonality_stack_view(
     ticker_label="Asset",
     as_of=None,
     template="plotly_dark",
+    metric_label="Return",
 ):
-    """Compose monthly and quarterly return seasonality panels."""
+    """Compose monthly and quarterly seasonality panels for one metric."""
+    metric_label = str(metric_label).strip() or "Metric"
     monthly_series = _coerce_return_series(monthly_returns)
     quarterly_series = _coerce_return_series(quarterly_returns)
     as_of = _coerce_as_of(as_of, (monthly_series, quarterly_series))
@@ -332,7 +341,9 @@ def plot_seasonality_stack_view(
     )
 
     for row, panel in enumerate(panels, start=1):
-        _add_panel_traces(fig, panel, row=row, as_of=as_of)
+        _add_panel_traces(
+            fig, panel, row=row, as_of=as_of, metric_label=metric_label
+        )
         fig.update_xaxes(
             title_text=panel.frequency_label,
             tickangle=-45,
@@ -340,10 +351,10 @@ def plot_seasonality_stack_view(
             row=row,
             col=1,
         )
-        fig.update_yaxes(title_text="Return", row=row, col=1)
+        fig.update_yaxes(title_text=metric_label, row=row, col=1)
 
     fig.update_layout(
-        title=f"{ticker_label} Return Seasonality",
+        title=f"{ticker_label} {metric_label} Seasonality",
         template=template,
         height=850,
         bargap=0.12,

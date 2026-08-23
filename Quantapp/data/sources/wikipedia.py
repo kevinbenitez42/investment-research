@@ -12,7 +12,8 @@ WIKIPEDIA_GICS_STRUCTURE_URL = "https://en.wikipedia.org/wiki/Global_Industry_Cl
 WIKIPEDIA_MARKET_INDEX_URLS = {
     "SP500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
     "NASDAQ_100": "https://en.wikipedia.org/wiki/NASDAQ-100",
-    "DIA": "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average",
+    # The main DJIA article no longer contains the constituents table.
+    "DIA": "https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies",
     "Russell_1000": "https://en.wikipedia.org/wiki/Russell_1000_Index",
 }
 WIKIPEDIA_SP_MARKET_CAP_INDEX_URLS = {

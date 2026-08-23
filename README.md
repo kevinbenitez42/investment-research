@@ -4,9 +4,9 @@ This repository is an investment research workspace that is gradually being resh
 
 The long-term direction is:
 
-`Electron -> React -> FastAPI -> shared Python analytics/data layer`
+`Browser frontend -> FastAPI -> shared Python analytics/data layer`
 
-Today, the repo still has a strong research-first workflow, but more reusable logic is being moved into `Quantapp` so it can eventually support desktop, web, and API surfaces without research-environment assumptions.
+Today, the repo still has a strong research-first workflow, but more reusable logic is being moved into `Quantapp` so it can support web and API surfaces without research-environment assumptions.
 
 ## How To Navigate
 
@@ -26,7 +26,6 @@ The older `Project_structure.txt` note has been retired. Folder-level Markdown R
 
 Application entry points and runtime shells.
 
-- [`apps/desktop/`](apps/desktop/README.md): active Electron prototype
 - [`apps/api/`](apps/api/README.md): reserved for the future FastAPI backend
 - [`apps/web/`](apps/web/README.md): reserved for the future browser frontend
 - [`apps/worker/`](apps/worker/README.md): reserved for background jobs and batch processing

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 
 COMMON_SINGLE_ASSET_PARAMS = {
-    "ticker_str": "NVDA",
+    "ticker_str":"SOXL",
     "interval": "1d",
     "period": "20y",
 }

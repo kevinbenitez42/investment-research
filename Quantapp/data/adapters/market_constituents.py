@@ -170,7 +170,19 @@ def normalize_market_index_tables(raw_tables: dict[str, list[pd.DataFrame]]) -> 
             columns=["Symbol", "Company", "Sector", "Sub-Industry"]
         )
     dia_table = normalize_dow_jones_constituents(raw_tables["DIA"], sp500_table=sp500_table)
-    russell_1000_table = normalize_russell_1000_constituents(raw_tables["Russell_1000"])
+    try:
+        russell_1000_table = normalize_russell_1000_constituents(
+            raw_tables["Russell_1000"]
+        )
+    except ValueError as exc:
+        warnings.warn(
+            f"Russell 1000 constituents are unavailable from Wikipedia: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        russell_1000_table = pd.DataFrame(
+            columns=["Symbol", "Sector", "Sub-Industry"]
+        )
 
     return {
         "SP500_TABLE": sp500_table,

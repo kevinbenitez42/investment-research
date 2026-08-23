@@ -799,8 +799,17 @@ def plot_sharpe_zscore_heatmap_view(
         title=figure_title,
         template=template,
         height=1420,
-        margin=dict(l=70, r=150, t=110, b=70),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0),
+        margin=dict(l=70, r=150, t=110, b=135),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.055,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(11, 15, 20, 0.88)",
+            bordercolor="rgba(100, 116, 139, 0.45)",
+            borderwidth=1,
+        ),
     )
 
     for row in (1, 2, 3):

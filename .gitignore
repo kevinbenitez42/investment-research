@@ -9,6 +9,8 @@ __pycache__/
 company_data/
 csv_files/
 quantapp.egg-info/
+node_modules/
+out/
 
 # Local environment files
 .env

@@ -18,6 +18,24 @@ from Quantapp.visualization.figure_helpers import (
 )
 from ._shared import dropdown_menu, finalize_dark_figure, header_margin, header_title, preferred_term_key, trace_datetime_bounds
 
+
+def _coerce_ratio_label(ratio_label):
+    label = str(ratio_label or "Sharpe").strip()
+    return label or "Sharpe"
+
+
+def _payload_series(metric_set, generic_key, legacy_key):
+    if generic_key in metric_set:
+        values = metric_set[generic_key]
+    else:
+        values = metric_set.get(legacy_key, pd.Series(dtype=float))
+    if values is None:
+        return pd.Series(dtype=float)
+    if isinstance(values, pd.Series):
+        return values.dropna()
+    return pd.Series(values).dropna()
+
+
 def plot_benchmark_zscore_detail(
     detail_zscore_map,
     benchmark_order,
@@ -26,10 +44,15 @@ def plot_benchmark_zscore_detail(
     default_benchmark=None,
     default_term=None,
     template="plotly_dark",
+    ratio_label="Sharpe",
 ):
     """
-    Plot benchmark detail panel: z-score, spread z-score, Sharpe, excess return, and volatility decomposition.
+    Plot benchmark ratio, spread, excess-return, and volatility decomposition.
+
+    Generic ``asset_ratio``, ``benchmark_ratio``, and ``ratio_spread`` payload
+    keys are preferred. The legacy Sharpe-specific keys remain supported.
     """
+    ratio_label = _coerce_ratio_label(ratio_label)
     if not benchmark_order:
         raise ValueError("benchmark_order is empty.")
     if not isinstance(detail_zscore_map, Mapping) or not detail_zscore_map:
@@ -50,8 +73,8 @@ def plot_benchmark_zscore_detail(
         row_heights=[0.26, 0.20, 0.18, 0.18, 0.18],
         subplot_titles=(
             "Risk-Adjusted Return Z-Score Comparison",
-            "Sharpe Spread Z-Score",
-            "Rolling Sharpe Ratio",
+            f"{ratio_label} Spread Z-Score",
+            f"Rolling {ratio_label} Ratio",
             "Annualized Excess Return",
             "Annualized Volatility",
         ),
@@ -77,20 +100,22 @@ def plot_benchmark_zscore_detail(
 
         asset_zscore = metric_set.get("asset", pd.Series(dtype=float)).dropna()
         benchmark_zscore = metric_set.get("benchmark", pd.Series(dtype=float)).dropna()
-        asset_sharpe = metric_set.get("asset_sharpe", pd.Series(dtype=float)).dropna()
-        benchmark_sharpe = metric_set.get("benchmark_sharpe", pd.Series(dtype=float)).dropna()
+        asset_ratio = _payload_series(metric_set, "asset_ratio", "asset_sharpe")
+        benchmark_ratio = _payload_series(
+            metric_set, "benchmark_ratio", "benchmark_sharpe"
+        )
         asset_excess_return = metric_set.get("asset_excess_return", pd.Series(dtype=float)).dropna()
         benchmark_excess_return = metric_set.get("benchmark_excess_return", pd.Series(dtype=float)).dropna()
         asset_volatility = metric_set.get("asset_volatility", pd.Series(dtype=float)).dropna()
         benchmark_volatility = metric_set.get("benchmark_volatility", pd.Series(dtype=float)).dropna()
-        sharpe_spread = metric_set.get("sharpe_spread", pd.Series(dtype=float)).dropna()
+        ratio_spread = _payload_series(metric_set, "ratio_spread", "sharpe_spread")
 
         detail_fig.add_trace(
             go.Scatter(
                 x=asset_zscore.index,
                 y=asset_zscore,
                 mode="lines",
-                name=f"{ticker_label} {term.title()} Sharpe Z-Score",
+                name=f"{ticker_label} {term.title()} {ratio_label} Z-Score",
                 legendgroup=f"asset-{term}",
                 line=dict(color=style["color"], dash="solid", width=2),
                 visible=visible,
@@ -104,7 +129,7 @@ def plot_benchmark_zscore_detail(
                 x=benchmark_zscore.index,
                 y=benchmark_zscore,
                 mode="lines",
-                name=f"{symbol} {term.title()} Sharpe Z-Score",
+                name=f"{symbol} {term.title()} {ratio_label} Z-Score",
                 legendgroup=f"{symbol}-{term}",
                 line=dict(color=style["color"], dash="dot", width=2),
                 visible=visible,
@@ -115,10 +140,13 @@ def plot_benchmark_zscore_detail(
         )
         detail_fig.add_trace(
             go.Scatter(
-                x=sharpe_spread.index,
-                y=sharpe_spread,
+                x=ratio_spread.index,
+                y=ratio_spread,
                 mode="lines",
-                name=f"{symbol} - {ticker_label} {term.title()} Sharpe Spread Z-Score",
+                name=(
+                    f"{symbol} - {ticker_label} {term.title()} "
+                    f"{ratio_label} Spread Z-Score"
+                ),
                 legendgroup=f"{symbol}-{term}",
                 line=dict(color=style["color"], dash="dash", width=2),
                 visible=visible,
@@ -129,10 +157,10 @@ def plot_benchmark_zscore_detail(
         )
         detail_fig.add_trace(
             go.Scatter(
-                x=asset_sharpe.index,
-                y=asset_sharpe,
+                x=asset_ratio.index,
+                y=asset_ratio,
                 mode="lines",
-                name=f"{ticker_label} {term.title()} Sharpe",
+                name=f"{ticker_label} {term.title()} {ratio_label}",
                 legendgroup=f"asset-{term}",
                 line=dict(color=style["color"], dash="solid", width=2),
                 visible=visible,
@@ -143,10 +171,10 @@ def plot_benchmark_zscore_detail(
         )
         detail_fig.add_trace(
             go.Scatter(
-                x=benchmark_sharpe.index,
-                y=benchmark_sharpe,
+                x=benchmark_ratio.index,
+                y=benchmark_ratio,
                 mode="lines",
-                name=f"{symbol} {term.title()} Sharpe",
+                name=f"{symbol} {term.title()} {ratio_label}",
                 legendgroup=f"{symbol}-{term}",
                 line=dict(color=style["color"], dash="dot", width=2),
                 visible=visible,
@@ -257,9 +285,9 @@ def plot_benchmark_zscore_detail(
             )
         )
 
-    detail_fig.update_yaxes(title_text="Sharpe Z-Score", row=1, col=1)
+    detail_fig.update_yaxes(title_text=f"{ratio_label} Z-Score", row=1, col=1)
     detail_fig.update_yaxes(title_text="Spread Z-Score", row=2, col=1)
-    detail_fig.update_yaxes(title_text="Sharpe Ratio", row=3, col=1)
+    detail_fig.update_yaxes(title_text=f"{ratio_label} Ratio", row=3, col=1)
     detail_fig.update_yaxes(title_text="Excess Return", tickformat=".1%", row=4, col=1)
     detail_fig.update_yaxes(title_text="Volatility", tickformat=".1%", row=5, col=1)
 

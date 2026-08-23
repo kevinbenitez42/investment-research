@@ -1,6 +1,6 @@
 # Web App
 
-This folder is reserved for the future web frontend.
+This folder contains browser and notebook-embedded application entry points.
 
 Intended responsibilities:
 
@@ -10,5 +10,7 @@ Intended responsibilities:
 
 Status:
 
-- scaffold only
-- no frontend application code has been added yet
+- `momentum_dashboard.py` contains the executable Momentum & Risk-Adjusted Performance Dash workflow
+- its research notebook is intentionally a one-cell inline launcher
+- `options_pricing_dashboard.py` contains Options Pricing Blocks 1–15A and its inline tabbed dashboard
+- the Options research notebook retains Blocks 16 onward after a single setup/dashboard launcher

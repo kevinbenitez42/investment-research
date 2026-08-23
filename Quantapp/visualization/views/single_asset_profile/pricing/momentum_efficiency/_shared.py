@@ -206,48 +206,133 @@ def _coerce_diagnostics_mapping(diagnostics_context, required_keys):
     return dict(diagnostics_context)
 
 
-def _add_sharpe_display_fields(context):
-    sharpe_table = context["sharpe_table"]
-    sharpe_only = sharpe_table.drop(columns="Optimal_Window", errors="ignore")
+def _normalize_ratio_type(value):
+    ratio_type = str(value or "sharpe").strip()
+    if ratio_type.lower().startswith("correlation::") and ratio_type.split("::", 1)[1].strip():
+        return "correlation::" + ratio_type.split("::", 1)[1].strip()
+    for metric_name in ("appraisal", "treynor", "information"):
+        prefix = f"{metric_name}::"
+        if ratio_type.lower().startswith(prefix) and ratio_type.split("::", 1)[1].strip():
+            return prefix + ratio_type.split("::", 1)[1].strip()
+    ratio_type = ratio_type.lower()
+    if ratio_type not in {
+        "sharpe", "sortino", "return", "volatility", "downside_volatility"
+    }:
+        raise ValueError(
+            "ratio_type must be 'sharpe', 'sortino', 'return', 'volatility', "
+            "or 'downside_volatility'."
+        )
+    return ratio_type
+
+
+def _ratio_label(ratio_type):
+    ratio_type = _normalize_ratio_type(ratio_type)
+    if ratio_type.startswith("correlation::"):
+        return f"Correlation vs {ratio_type.split('::', 1)[1]}"
+    for metric_name in ("appraisal", "treynor", "information"):
+        if ratio_type.startswith(f"{metric_name}::"):
+            return f"{metric_name.title()} vs {ratio_type.split('::', 1)[1]}"
+    return {
+        "sharpe": "Sharpe",
+        "sortino": "Sortino",
+        "return": "Return",
+        "volatility": "Volatility",
+        "downside_volatility": "Downside Volatility",
+    }[ratio_type]
+
+
+def _coerce_ratio_context(diagnostics_context, required_keys=()):
+    context = _coerce_diagnostics_mapping(diagnostics_context, set(required_keys))
+    ratio_type = _normalize_ratio_type(context.get("ratio_type", "sharpe"))
+    ratio_table = context.get("ratio_table")
+    if ratio_table is None:
+        ratio_table = context.get(f"{ratio_type}_table")
+    if ratio_table is None:
+        # ``sharpe_table`` was the original public schema. It remains the final
+        # fallback so older notebook contexts continue to coerce unchanged.
+        ratio_table = context.get("sharpe_table")
+    if ratio_table is None:
+        raise ValueError(
+            "diagnostics_context must provide ratio_table, "
+            f"{ratio_type}_table, or the legacy sharpe_table key."
+        )
+
+    ratio_table = (
+        ratio_table
+        if isinstance(ratio_table, pd.DataFrame)
+        else pd.DataFrame(ratio_table)
+    )
+    ratio_label = str(context.get("ratio_label") or _ratio_label(ratio_type))
+    context["ratio_type"] = ratio_type
+    context["ratio_label"] = ratio_label
+    context["ratio_table"] = ratio_table
+    context[f"{ratio_type}_table"] = ratio_table
+    # Compatibility alias: existing visualization code can consume a Sortino
+    # context before all callers have migrated to the generic field names.
+    context["sharpe_table"] = ratio_table
+    return context
+
+
+def _add_ratio_display_fields(context):
+    ratio_table = context["ratio_table"]
+    ratio_only = (
+        ratio_table.drop(columns="Optimal_Window")
+        if "Optimal_Window" in ratio_table.columns
+        else ratio_table
+    )
     surface_years = int(context.get("surface_years", DEFAULT_SURFACE_YEARS))
 
-    if sharpe_only.empty:
-        sharpe_surface = sharpe_only
+    if ratio_only.empty:
+        ratio_surface = ratio_only
     else:
-        last_date = sharpe_only.index[-1]
+        last_date = ratio_only.index[-1]
         start_date = last_date - pd.Timedelta(days=365 * surface_years)
-        sharpe_surface = sharpe_only.loc[start_date:last_date]
+        ratio_surface = ratio_only.loc[start_date:last_date]
 
     context["highlight_windows"] = context.get("highlight_windows", DEFAULT_HIGHLIGHT_WINDOWS)
-    context["sharpe_only"] = sharpe_only
-    context["sharpe_surface"] = sharpe_surface
+    context["ratio_only"] = ratio_only
+    context["ratio_surface"] = ratio_surface
+    context[f"{context['ratio_type']}_only"] = ratio_only
+    context[f"{context['ratio_type']}_surface"] = ratio_surface
+    # Legacy aliases deliberately point at the selected ratio, not always at
+    # Sharpe. That lets older renderers display the correct values while their
+    # labels are migrated separately.
+    context["sharpe_only"] = ratio_only
+    context["sharpe_surface"] = ratio_surface
     context["surface_years"] = surface_years
     return context
 
 
+def _add_sharpe_display_fields(context):
+    """Backward-compatible wrapper for the ratio-generic display schema."""
+    return _add_ratio_display_fields(_coerce_ratio_context(context))
+
+
+def coerce_ratio_surface_context(diagnostics_context):
+    context = _coerce_ratio_context(diagnostics_context)
+    return _add_ratio_display_fields(context)
+
+
 def coerce_sharpe_surface_context(diagnostics_context):
-    context = _coerce_diagnostics_mapping(diagnostics_context, {"sharpe_table"})
-    return _add_sharpe_display_fields(context)
+    """Backward-compatible name for :func:`coerce_ratio_surface_context`."""
+    return coerce_ratio_surface_context(diagnostics_context)
 
 
 def coerce_momentum_diagnostics_context(diagnostics_context):
-    context = _coerce_diagnostics_mapping(
-        diagnostics_context,
-        {"sharpe_table", "volatility_df"},
-    )
-    context = _add_sharpe_display_fields(context)
-    sharpe_only = context["sharpe_only"]
-    optimal_windows = sharpe_only.idxmax(axis=1).dropna()
+    context = _coerce_ratio_context(diagnostics_context, {"volatility_df"})
+    context = _add_ratio_display_fields(context)
+    ratio_only = context["ratio_only"]
+    optimal_windows = ratio_only.dropna(how="all").idxmax(axis=1).dropna()
     volatility_df = context["volatility_df"]
-    window_sizes = context.get("window_sizes", list(sharpe_only.columns))
+    window_sizes = context.get("window_sizes", list(ratio_only.columns))
 
-    latest_sharpe_row = sharpe_only.dropna(how="all").tail(1)
-    if latest_sharpe_row.empty:
-        current_sharpe = pd.Series(dtype=float)
+    latest_ratio_row = ratio_only.dropna(how="all").tail(1)
+    if latest_ratio_row.empty:
+        current_ratio = pd.Series(dtype=float)
     else:
-        current_sharpe = latest_sharpe_row.iloc[0].reindex(window_sizes)
+        current_ratio = latest_ratio_row.iloc[0].reindex(window_sizes)
 
-    def sharpe_zscore(series):
+    def ratio_zscore(series):
         clean = pd.Series(series).dropna().sort_index()
         if clean.empty:
             return pd.Series(dtype=float)
@@ -256,12 +341,12 @@ def coerce_momentum_diagnostics_context(diagnostics_context):
             return pd.Series(0.0, index=clean.index)
         return (clean - clean.mean()) / std
 
-    sharpe_zscore_frame = sharpe_only.apply(sharpe_zscore)
-    sharpe_zscore_mean_by_window = sharpe_zscore_frame.mean().reindex(window_sizes)
-    sharpe_zscore_std_by_window = sharpe_zscore_frame.std().reindex(window_sizes)
-    cross_window_mean = sharpe_zscore_frame.mean(axis=1)
-    cross_window_std = sharpe_zscore_frame.std(axis=1)
-    cross_window_zscore_frame = sharpe_zscore_frame.sub(cross_window_mean, axis=0).div(
+    ratio_zscore_frame = ratio_only.apply(ratio_zscore)
+    ratio_zscore_mean_by_window = ratio_zscore_frame.mean().reindex(window_sizes)
+    ratio_zscore_std_by_window = ratio_zscore_frame.std().reindex(window_sizes)
+    cross_window_mean = ratio_zscore_frame.mean(axis=1)
+    cross_window_std = ratio_zscore_frame.std(axis=1)
+    cross_window_zscore_frame = ratio_zscore_frame.sub(cross_window_mean, axis=0).div(
         cross_window_std.replace(0, np.nan),
         axis=0,
     )
@@ -269,34 +354,57 @@ def coerce_momentum_diagnostics_context(diagnostics_context):
     cross_window_zscore_mean_by_window = cross_window_zscore_frame.mean().reindex(window_sizes)
     cross_window_zscore_std_by_window = cross_window_zscore_frame.std().reindex(window_sizes)
 
-    latest_sharpe_zscore_row = sharpe_zscore_frame.dropna(how="all").tail(1)
-    if latest_sharpe_zscore_row.empty:
-        current_sharpe_zscore = pd.Series(dtype=float)
-        current_sharpe_zscore_date = None
-        current_sharpe_cross_window_zscore = pd.Series(dtype=float)
+    latest_ratio_zscore_row = ratio_zscore_frame.dropna(how="all").tail(1)
+    if latest_ratio_zscore_row.empty:
+        current_ratio_zscore = pd.Series(dtype=float)
+        current_ratio_zscore_date = None
+        current_ratio_cross_window_zscore = pd.Series(dtype=float)
     else:
-        current_sharpe_zscore = latest_sharpe_zscore_row.iloc[0].reindex(window_sizes)
-        current_sharpe_zscore_date = latest_sharpe_zscore_row.index[0]
+        current_ratio_zscore = latest_ratio_zscore_row.iloc[0].reindex(window_sizes)
+        current_ratio_zscore_date = latest_ratio_zscore_row.index[0]
         latest_cross_window_zscore_row = cross_window_zscore_frame.dropna(how="all").tail(1)
         if latest_cross_window_zscore_row.empty:
-            current_sharpe_cross_window_zscore = pd.Series(dtype=float)
+            current_ratio_cross_window_zscore = pd.Series(dtype=float)
         else:
-            current_sharpe_cross_window_zscore = latest_cross_window_zscore_row.iloc[0].reindex(window_sizes)
+            current_ratio_cross_window_zscore = latest_cross_window_zscore_row.iloc[0].reindex(window_sizes)
 
     context["window_sizes"] = window_sizes
     context["optimal_windows"] = optimal_windows
     context["optimal_windows_int"] = optimal_windows.astype(int)
-    context["current_sharpe"] = current_sharpe
-    context["current_sharpe_zscore"] = current_sharpe_zscore
-    context["current_sharpe_zscore_date"] = current_sharpe_zscore_date
-    context["sharpe_zscore_mean_by_window"] = sharpe_zscore_mean_by_window
-    context["sharpe_zscore_std_by_window"] = sharpe_zscore_std_by_window
-    context["current_sharpe_cross_window_zscore"] = current_sharpe_cross_window_zscore
+    context["current_ratio"] = current_ratio
+    context["current_ratio_zscore"] = current_ratio_zscore
+    context["current_ratio_zscore_date"] = current_ratio_zscore_date
+    context["ratio_zscore_mean_by_window"] = ratio_zscore_mean_by_window
+    context["ratio_zscore_std_by_window"] = ratio_zscore_std_by_window
+    context["current_ratio_cross_window_zscore"] = current_ratio_cross_window_zscore
     context["cross_window_zscore_mean_by_window"] = cross_window_zscore_mean_by_window
     context["cross_window_zscore_std_by_window"] = cross_window_zscore_std_by_window
-    context["mean_sharpe"] = sharpe_only.mean()
-    context["median_sharpe"] = sharpe_only.median()
-    context["std_sharpe"] = sharpe_only.std()
+    context["mean_ratio"] = ratio_only.mean()
+    context["median_ratio"] = ratio_only.median()
+    context["std_ratio"] = ratio_only.std()
+
+    ratio_type = context["ratio_type"]
+    context[f"current_{ratio_type}"] = current_ratio
+    context[f"current_{ratio_type}_zscore"] = current_ratio_zscore
+    context[f"current_{ratio_type}_zscore_date"] = current_ratio_zscore_date
+    context[f"{ratio_type}_zscore_mean_by_window"] = ratio_zscore_mean_by_window
+    context[f"{ratio_type}_zscore_std_by_window"] = ratio_zscore_std_by_window
+    context[f"current_{ratio_type}_cross_window_zscore"] = current_ratio_cross_window_zscore
+    context[f"mean_{ratio_type}"] = context["mean_ratio"]
+    context[f"median_{ratio_type}"] = context["median_ratio"]
+    context[f"std_{ratio_type}"] = context["std_ratio"]
+
+    # Original public field names remain selected-ratio aliases until every
+    # downstream view has adopted the generic schema.
+    context["current_sharpe"] = current_ratio
+    context["current_sharpe_zscore"] = current_ratio_zscore
+    context["current_sharpe_zscore_date"] = current_ratio_zscore_date
+    context["sharpe_zscore_mean_by_window"] = ratio_zscore_mean_by_window
+    context["sharpe_zscore_std_by_window"] = ratio_zscore_std_by_window
+    context["current_sharpe_cross_window_zscore"] = current_ratio_cross_window_zscore
+    context["mean_sharpe"] = context["mean_ratio"]
+    context["median_sharpe"] = context["median_ratio"]
+    context["std_sharpe"] = context["std_ratio"]
     context["mean_volatility"] = volatility_df.mean()
     context["median_volatility"] = volatility_df.median()
     return context

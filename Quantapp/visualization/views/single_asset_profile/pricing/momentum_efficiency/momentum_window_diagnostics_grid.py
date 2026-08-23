@@ -12,6 +12,30 @@ from Quantapp.visualization.traces.line import build_line_trace
 from ._shared import add_reference_vlines, coerce_momentum_diagnostics_context, finalize_dark_figure
 
 
+HORIZON_SEGMENT_REGIONS = (
+    ("Very Short", None, 21, "#64748b"),
+    ("Short", 21, 63, "#94a3b8"),
+    ("Medium", 63, 126, "#64748b"),
+    ("Long", 126, 252, "#94a3b8"),
+    ("LEAPS", 252, 504, "#64748b"),
+    ("Extended", 504, None, "#94a3b8"),
+)
+
+HORIZON_SEGMENT_LINE_STYLES = (
+    ("#f8fafc", "solid"),
+    ("#e2e8f0", "dash"),
+    ("#cbd5e1", "dot"),
+    ("#f1f5f9", "dashdot"),
+    ("#d1d5db", "longdash"),
+    ("#94a3b8", "longdashdot"),
+)
+
+
+def _coerce_ratio_label(ratio_label):
+    label = str(ratio_label or "Sharpe").strip()
+    return label or "Sharpe"
+
+
 def _build_optimal_window_trace(x, y, *, visible=True):
     return build_line_trace(
         x=x,
@@ -30,36 +54,42 @@ def _build_optimal_window_histogram_trace(values, *, nbins):
     )
 
 
-def _build_mean_sharpe_trace(x, y, *, visible=True):
+def _build_mean_sharpe_trace(x, y, *, ratio_label="Sharpe", visible=True):
+    ratio_label = _coerce_ratio_label(ratio_label)
     return build_line_trace(
         x=x,
         y=y,
-        name="Mean Sharpe Ratio",
+        name=f"Mean {ratio_label} Ratio",
         mode="lines+markers",
         visible=visible,
     )
 
 
-def _build_median_sharpe_trace(x, y, *, visible=True):
+def _build_median_sharpe_trace(x, y, *, ratio_label="Sharpe", visible=True):
+    ratio_label = _coerce_ratio_label(ratio_label)
     return build_line_trace(
         x=x,
         y=y,
-        name="Median Sharpe Ratio",
+        name=f"Median {ratio_label} Ratio",
         mode="lines+markers",
         visible=visible,
     )
 
 
-def _build_current_sharpe_trace(x, y, *, visible=True):
+def _build_current_sharpe_trace(x, y, *, ratio_label="Sharpe", visible=True):
+    ratio_label = _coerce_ratio_label(ratio_label)
     return build_line_trace(
         x=x,
         y=y,
-        name="Current Sharpe Ratio",
+        name=f"Current {ratio_label} Ratio",
         mode="lines+markers",
         visible=visible,
         width=3,
         marker=dict(size=4),
-        hovertemplate="Window: %{x} day(s)<br>Current Sharpe: %{y:.2f}<extra></extra>",
+        hovertemplate=(
+            f"Window: %{{x}} day(s)<br>Current {ratio_label}: "
+            "%{y:.2f}<extra></extra>"
+        ),
     )
 
 
@@ -83,15 +113,21 @@ def _build_median_volatility_trace(x, y, *, visible=True):
     )
 
 
-def _build_current_sharpe_zscore_trace(x, y, *, visible=True):
+def _build_current_sharpe_zscore_trace(
+    x, y, *, ratio_label="Sharpe", visible=True
+):
+    ratio_label = _coerce_ratio_label(ratio_label)
     return build_line_trace(
         x=x,
         y=y,
-        name="Current Sharpe Z-Score",
+        name=f"Current {ratio_label} Z-Score",
         mode="lines+markers",
         visible=visible,
         marker=dict(size=4),
-        hovertemplate="Window: %{x} day(s)<br>Current Sharpe Z-Score: %{y:.2f}<extra></extra>",
+        hovertemplate=(
+            f"Window: %{{x}} day(s)<br>Current {ratio_label} Z-Score: "
+            "%{y:.2f}<extra></extra>"
+        ),
     )
 
 
@@ -275,8 +311,10 @@ def plot_momentum_window_diagnostics_grid_view(
     *,
     ticker_label="Asset",
     template="plotly_dark",
+    ratio_label="Sharpe",
 ):
-    """Compose the primary momentum-window diagnostics grid."""
+    """Compose the primary momentum-window diagnostics grid for one ratio."""
+    ratio_label = _coerce_ratio_label(ratio_label)
     context = coerce_momentum_diagnostics_context(diagnostics_context)
     optimal_windows = context["optimal_windows"]
     optimal_windows_int = context["optimal_windows_int"]
@@ -287,24 +325,20 @@ def plot_momentum_window_diagnostics_grid_view(
     current_sharpe_zscore_date = context["current_sharpe_zscore_date"]
     sharpe_zscore_mean_by_window = context["sharpe_zscore_mean_by_window"]
     sharpe_zscore_std_by_window = context["sharpe_zscore_std_by_window"]
-    current_sharpe_cross_window_zscore = context["current_sharpe_cross_window_zscore"]
-    cross_window_zscore_mean_by_window = context["cross_window_zscore_mean_by_window"]
-    cross_window_zscore_std_by_window = context["cross_window_zscore_std_by_window"]
     mean_sharpe = context["mean_sharpe"]
     median_sharpe = context["median_sharpe"]
     mean_volatility = context["mean_volatility"]
     median_volatility = context["median_volatility"]
-    current_sharpe_zscore_title = "Current Sharpe Z-Score by Window"
+    current_sharpe_zscore_title = f"Current {ratio_label} Z-Score by Window"
     if current_sharpe_zscore_date is not None:
         if hasattr(current_sharpe_zscore_date, "strftime"):
             current_sharpe_zscore_date = current_sharpe_zscore_date.strftime("%Y-%m-%d")
-        current_sharpe_zscore_title = f"Current Sharpe Z-Score by Window ({current_sharpe_zscore_date})"
-    cross_window_zscore_title = "Cross-Window Relative Z-Score by Window"
-    if current_sharpe_zscore_date is not None:
-        cross_window_zscore_title = f"Cross-Window Relative Z-Score by Window ({current_sharpe_zscore_date})"
-
+        current_sharpe_zscore_title = (
+            f"Current {ratio_label} Z-Score by Window "
+            f"({current_sharpe_zscore_date})"
+        )
     fig = make_subplots(
-        rows=8,
+        rows=5,
         cols=2,
         specs=[
             [{}, {}],
@@ -312,25 +346,19 @@ def plot_momentum_window_diagnostics_grid_view(
             [{"colspan": 2}, None],
             [{"colspan": 2}, None],
             [{"colspan": 2}, None],
-            [{"colspan": 2}, None],
-            [{"colspan": 2}, None],
-            [{"colspan": 2}, None],
         ],
         subplot_titles=(
             "Rolling Optimal Momentum Window",
             "Optimal Window Distribution",
-            "Current vs Mean/Median Sharpe by Window",
+            f"Current vs Mean/Median {ratio_label} by Window",
             "Mean vs Median Volatility by Window",
             current_sharpe_zscore_title,
-            "First Horizon Derivative of Current Sharpe Z-Score",
-            "Second Horizon Derivative of Current Sharpe Z-Score",
-            cross_window_zscore_title,
-            "First Horizon Derivative of Cross-Window Relative Z-Score",
-            "Second Horizon Derivative of Cross-Window Relative Z-Score",
+            f"First Horizon Derivative of Current {ratio_label} Z-Score",
+            f"Second Horizon Derivative of Current {ratio_label} Z-Score",
         ),
         horizontal_spacing=0.09,
         vertical_spacing=0.035,
-        row_heights=[0.13, 0.13, 0.18, 0.09, 0.09, 0.18, 0.09, 0.09],
+        row_heights=[0.16, 0.16, 0.34, 0.17, 0.17],
     )
 
     fig.add_trace(
@@ -353,6 +381,7 @@ def plot_momentum_window_diagnostics_grid_view(
     mean_sharpe_trace = _build_mean_sharpe_trace(
         mean_sharpe.index,
         mean_sharpe.values,
+        ratio_label=ratio_label,
         visible=True,
     )
     mean_sharpe_trace.showlegend = True
@@ -364,6 +393,7 @@ def plot_momentum_window_diagnostics_grid_view(
     median_sharpe_trace = _build_median_sharpe_trace(
         median_sharpe.index,
         median_sharpe.values,
+        ratio_label=ratio_label,
         visible=True,
     )
     median_sharpe_trace.showlegend = True
@@ -375,6 +405,7 @@ def plot_momentum_window_diagnostics_grid_view(
     current_sharpe_trace = _build_current_sharpe_trace(
         current_sharpe.index,
         current_sharpe.values,
+        ratio_label=ratio_label,
         visible=True,
     )
     current_sharpe_trace.showlegend = True
@@ -408,6 +439,7 @@ def plot_momentum_window_diagnostics_grid_view(
     current_sharpe_zscore_trace = _build_current_sharpe_zscore_trace(
         current_sharpe_zscore.index,
         current_sharpe_zscore.values,
+        ratio_label=ratio_label,
         visible=True,
     )
     current_sharpe_zscore_trace.showlegend = True
@@ -420,7 +452,7 @@ def plot_momentum_window_diagnostics_grid_view(
         _build_horizon_derivative_trace(
             current_sharpe_zscore.index,
             current_sharpe_zscore.values,
-            base_name="Current Sharpe Z-Score",
+            base_name=f"Current {ratio_label} Z-Score",
             order=1,
         ),
         row=4,
@@ -430,48 +462,17 @@ def plot_momentum_window_diagnostics_grid_view(
         _build_horizon_derivative_trace(
             current_sharpe_zscore.index,
             current_sharpe_zscore.values,
-            base_name="Current Sharpe Z-Score",
+            base_name=f"Current {ratio_label} Z-Score",
             order=2,
         ),
         row=5,
-        col=1,
-    )
-    cross_window_sharpe_zscore_trace = _build_cross_window_sharpe_zscore_trace(
-        current_sharpe_cross_window_zscore.index,
-        current_sharpe_cross_window_zscore.values,
-        visible=True,
-    )
-    cross_window_sharpe_zscore_trace.showlegend = True
-    fig.add_trace(
-        cross_window_sharpe_zscore_trace,
-        row=6,
-        col=1,
-    )
-    fig.add_trace(
-        _build_horizon_derivative_trace(
-            current_sharpe_cross_window_zscore.index,
-            current_sharpe_cross_window_zscore.values,
-            base_name="Cross-Window Relative Z-Score",
-            order=1,
-        ),
-        row=7,
-        col=1,
-    )
-    fig.add_trace(
-        _build_horizon_derivative_trace(
-            current_sharpe_cross_window_zscore.index,
-            current_sharpe_cross_window_zscore.values,
-            base_name="Cross-Window Relative Z-Score",
-            order=2,
-        ),
-        row=8,
         col=1,
     )
     if not sharpe_zscore_mean_by_window.dropna().empty:
         sharpe_zscore_mean_trace = _build_zscore_mean_reference_trace(
             current_sharpe_zscore.index,
             sharpe_zscore_mean_by_window,
-            name="Historical Mean Sharpe Z-Score",
+            name=f"Historical Mean {ratio_label} Z-Score",
             visible=True,
         )
         sharpe_zscore_mean_trace.showlegend = True
@@ -484,41 +485,54 @@ def plot_momentum_window_diagnostics_grid_view(
         current_sharpe_zscore.index,
         mean_by_window=sharpe_zscore_mean_by_window,
         std_by_window=sharpe_zscore_std_by_window,
-        label_prefix="Historical Sharpe Z-Score",
+        label_prefix=f"Historical {ratio_label} Z-Score",
     ):
         fig.add_trace(
             reference_trace,
             row=3,
             col=1,
         )
-    if not cross_window_zscore_mean_by_window.dropna().empty:
-        cross_window_zscore_mean_trace = _build_zscore_mean_reference_trace(
-            current_sharpe_cross_window_zscore.index,
-            cross_window_zscore_mean_by_window,
-            name="Historical Mean Cross-Window Relative Z-Score",
-            visible=True,
-        )
-        cross_window_zscore_mean_trace.showlegend = True
-        fig.add_trace(
-            cross_window_zscore_mean_trace,
-            row=6,
-            col=1,
-        )
-    for reference_trace in _build_zscore_std_reference_traces(
-        current_sharpe_cross_window_zscore.index,
-        mean_by_window=cross_window_zscore_mean_by_window,
-        std_by_window=cross_window_zscore_std_by_window,
-        label_prefix="Historical Cross-Window Relative Z-Score",
-    ):
-        fig.add_trace(
-            reference_trace,
-            row=6,
-            col=1,
-        )
     _add_current_sharpe_zscore_zones(fig, 3, 1)
-    _add_relative_zscore_zones(fig, 6, 1)
-    for row, col in ((1, 2), (2, 1), (2, 2), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1)):
+    for row, col in ((1, 2), (2, 1), (2, 2), (3, 1), (4, 1), (5, 1)):
         add_reference_vlines(fig, highlight_windows, row=row, col=col)
+    minimum_horizon = min(window_sizes)
+    maximum_horizon = max(window_sizes)
+    for segment_index, (
+        label, region_start, region_end, color
+    ) in enumerate(HORIZON_SEGMENT_REGIONS):
+        left = max(minimum_horizon, region_start if region_start is not None else minimum_horizon)
+        right = min(maximum_horizon, region_end if region_end is not None else maximum_horizon)
+        if right <= left:
+            continue
+        for profile_row in (3, 4, 5):
+            region_kwargs = dict(
+                x0=left,
+                x1=right,
+                row=profile_row,
+                col=1,
+                fillcolor=color,
+                opacity=0.06 if segment_index % 2 == 0 else 0.0,
+                line_width=0,
+                layer="below",
+                name=f"quantapp-horizon-region|{left}|{right}",
+            )
+            if profile_row == 3:
+                region_kwargs.update(
+                    annotation_text=f"<b>{label}</b>",
+                    annotation_position="inside",
+                    annotation_y=0.75,
+                    annotation_yanchor="middle",
+                    annotation_name=(
+                        f"quantapp-horizon-region-label|{left}|{right}"
+                    ),
+                    annotation_font_size=13,
+                    annotation_font_color="#e2e8f0",
+                    annotation_bgcolor="rgba(15, 23, 42, 0.72)",
+                    annotation_bordercolor="#64748b",
+                    annotation_borderwidth=1,
+                    annotation_borderpad=3,
+                )
+            fig.add_vrect(**region_kwargs)
     fig.update_xaxes(title_text="Date", row=1, col=1)
     fig.update_xaxes(title_text="Optimal Window Size (Days)", row=1, col=2)
     fig.update_xaxes(title_text="Momentum Window Size (Days)", row=2, col=1)
@@ -526,10 +540,7 @@ def plot_momentum_window_diagnostics_grid_view(
     fig.update_xaxes(title_text="Momentum Window Size (Days)", row=3, col=1)
     fig.update_xaxes(title_text="Momentum Window Size (Days)", row=4, col=1)
     fig.update_xaxes(title_text="Momentum Window Size (Days)", row=5, col=1)
-    fig.update_xaxes(title_text="Momentum Window Size (Days)", row=6, col=1)
-    fig.update_xaxes(title_text="Momentum Window Size (Days)", row=7, col=1)
-    fig.update_xaxes(title_text="Momentum Window Size (Days)", row=8, col=1)
-    for linked_row in (4, 5, 6, 7, 8):
+    for linked_row in (4, 5):
         fig.update_xaxes(matches="x5", row=linked_row, col=1)
 
     row3_range = _axis_range_for_series(
@@ -545,30 +556,16 @@ def plot_momentum_window_diagnostics_grid_view(
         ],
         min_span=1.0,
     )
-    row4_range = _axis_range_for_series(
-        [
-            current_sharpe_cross_window_zscore,
-            cross_window_zscore_mean_by_window,
-            *[
-                _std_reference_series(cross_window_zscore_mean_by_window, cross_window_zscore_std_by_window, level, sign)
-                for level in (1, 2)
-                for sign in (1, -1)
-            ],
-            pd.Series([-2.0, 2.0]),
-        ],
-        min_span=1.0,
-    )
     fig.update_yaxes(title_text="Window Size (Days)", row=1, col=1)
     fig.update_yaxes(title_text="Frequency", row=1, col=2)
-    fig.update_yaxes(title_text="Sharpe Ratio", row=2, col=1)
+    fig.update_yaxes(title_text=f"{ratio_label} Ratio", row=2, col=1)
     fig.update_yaxes(title_text="Annualized Volatility", row=2, col=2)
-    fig.update_yaxes(title_text="Sharpe Z-Score", row=3, col=1, range=row3_range)
+    fig.update_yaxes(
+        title_text=f"{ratio_label} Z-Score", row=3, col=1, range=row3_range
+    )
     fig.update_yaxes(title_text="Slope (Z / 20d)", row=4, col=1)
     fig.update_yaxes(title_text="Curvature (Z / 20d²)", row=5, col=1)
-    fig.update_yaxes(title_text="Relative Z-Score", row=6, col=1, range=row4_range)
-    fig.update_yaxes(title_text="Slope (Z / 20d)", row=7, col=1)
-    fig.update_yaxes(title_text="Curvature (Z / 20d²)", row=8, col=1)
-    for derivative_row in (4, 5, 7, 8):
+    for derivative_row in (4, 5):
         fig.add_hline(
             y=0,
             row=derivative_row,
@@ -581,7 +578,7 @@ def plot_momentum_window_diagnostics_grid_view(
     fig.update_layout(
         title=f"{ticker_label} Momentum Window Diagnostics",
         template=template,
-        height=2750,
+        height=1900,
         bargap=0.1,
         legend=dict(
             orientation="h",
