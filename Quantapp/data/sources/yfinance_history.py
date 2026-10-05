@@ -35,6 +35,7 @@ def fetch_history_many(
     *,
     period: str = "max",
     interval: str = "1d",
+    cache_ttl_seconds: float | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch market history for multiple symbols in one cached batch."""
     normalized_symbols = list(
@@ -51,6 +52,7 @@ def fetch_history_many(
         auto_adjust=True,
         progress=False,
         threads=True,
+        **({"cache_ttl_seconds": cache_ttl_seconds} if cache_ttl_seconds is not None else {}),
     )
     if panel.empty:
         return {}

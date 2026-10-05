@@ -96,6 +96,17 @@ class GICSDataClient:
         # The previous row-wise name_to_gics call reread the reference CSV for
         # every company and then scanned it again for every unique code.
         combined_table = pd.concat([sp500_table, sp400_table, sp600_table], ignore_index=True)
+        # Older constituent pages still use the pre-2023 name for code 25504040.
+        combined_table['Sub-Industry'] = combined_table['Sub-Industry'].str.strip().replace(
+            {'Specialty Stores': 'Other Specialty Retail'}
+        )
+        combined_table['Symbol'] = combined_table['Symbol'].str.strip().str.upper()
+        conflicts = combined_table.groupby('Symbol')[['Sector', 'Sub-Industry']].nunique()
+        if conflicts.gt(1).any(axis=None):
+            raise ValueError('Conflicting Wikipedia classifications for duplicate symbols.')
+        # Pages can temporarily overlap after an index migration. Prefer the
+        # larger-cap index deterministically; never count a company twice.
+        combined_table = combined_table.drop_duplicates('Symbol', keep='first')
         gics_table = self._load_gics_table()
         gics_lookup = (
             gics_table[
@@ -120,6 +131,9 @@ class GICSDataClient:
             )
         )
         combined_table = combined_table.merge(gics_lookup, on='Sub-Industry', how='left')
+        missing = combined_table.loc[combined_table['GICS Code'].isna(), 'Sub-Industry'].unique()
+        if len(missing):
+            raise ValueError(f'Unmapped Wikipedia GICS classifications: {list(missing)}')
         combined_table['GICS Code'] = combined_table['GICS Code'].astype('Int64')
         #make sure the Industry Group code, Industry Code, Sector Code are Int64
         combined_table['Sector Code'] = combined_table['Sector Code'].astype('Int64')

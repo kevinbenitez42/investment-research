@@ -15,6 +15,7 @@ Run this module from the research notebook so Dash renders in that notebook's ou
 # Block 2: import libraries and initialize analytics services
 import logging
 import warnings
+from threading import RLock
 from pathlib import Path
 import sys
 import numpy as np
@@ -32,6 +33,14 @@ else:
 from Quantapp.project import ensure_project_root_on_path
 
 PROJECT_ROOT = ensure_project_root_on_path()
+from apps.web.dashboard_cache import store_bounded
+from apps.web.metric_comparison import metric_keys, combine_reference_figures
+from apps.web.zscore_baseline import (
+    BASELINE as _zscore_baseline,
+    baseline_key as _zscore_baseline_key,
+    normalize as _normalize_zscore,
+    finish_zscore_figure as _finish_zscore_figure,
+)
 SINGLE_ASSET_DIRECTORY = PROJECT_ROOT / "Research" / "Single Asset"
 if str(SINGLE_ASSET_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SINGLE_ASSET_DIRECTORY))
@@ -49,7 +58,6 @@ from Quantapp.visualization.views.single_asset_profile.pricing.momentum_efficien
     plot_momentum_zscore_comparison,
     plot_momentum_window_diagnostics_grid_view,
     plot_rolling_correlation_view,
-    plot_seasonality_stack_view,
     plot_sharpe_sortino_comparison,
     plot_sharpe_surface_view,
     plot_sharpe_zscore_heatmap_view,
@@ -374,8 +382,6 @@ risk_free_ticker = "^IRX"
 # populated and the comparison is economically meaningful.
 benchmark_tickers = ["^GSPC"] if str(ticker_str).strip().upper() == "SPY" else ["SPY"]
 include_factor_peer_index = True
-auto_build_factor_peer_index = False  # Load cached GICS indexes without building a large peer basket during startup.
-factor_peer_index_max_symbols = 40  # Limit peer downloads while retaining a broad peer basket.
 factor_peer_index_source_ticker = None  # None = current ticker. For an ETF, optionally set a representative stock whose Factor peer index should be used.
 peer_index_cache_dir = PROJECT_ROOT / "company_data" / "factor_peer_indexes"
 time_frame_map = {"short": 21, "mid": 50, "long": 200}
@@ -615,67 +621,22 @@ def load_factor_gics_indexes(target_symbol, cache_dir):
             }
     return loaded_indexes, cache_paths
 
+# One shared weekly Wikipedia list, daily company prices, and four peer baskets.
+from apps.web.peer_cache import refresh_gics_benchmarks, peer_status
+
+factor_peer_refresh_results = {}
 if include_factor_peer_index:
     factor_peer_lookup_symbol = factor_peer_index_source_ticker or ticker_str
-    factor_gics_benchmarks, factor_gics_cache_paths = load_factor_gics_indexes(
-        factor_peer_lookup_symbol, peer_index_cache_dir
+    factor_peer_refresh_results = refresh_gics_benchmarks(
+        PROJECT_ROOT, factor_peer_lookup_symbol, period=period, interval=interval
     )
-    if factor_gics_benchmarks:
-        for factor_index_label, factor_index_payload in factor_gics_benchmarks.items():
-            factor_index_frame = factor_index_payload["frame"]
-            if factor_index_frame.empty:
-                print(f"Factor index cache has no dates overlapping the asset history: {factor_index_payload['path']}")
-                continue
-            benchmark_data[factor_index_label] = factor_index_frame
-            print(
-                f"Loaded benchmark {factor_index_label} ({factor_index_payload['level']})"
-                + (f" for ETF/asset {ticker_str}" if factor_peer_lookup_symbol != ticker_str else "")
-                + f" from {factor_index_payload['path']}"
-            )
-        missing_gics_levels = [
-            level for level, path in factor_gics_cache_paths.items() if not path.exists()
-        ]
-        if missing_gics_levels:
-            print(f"Missing Factor GICS index caches: {missing_gics_levels}. Rerun Factor Analysis block 5.")
-    else:
-        factor_peer_frame, factor_peer_cache_path, factor_peer_metadata = load_factor_peer_index(
-            factor_peer_lookup_symbol, peer_index_cache_dir
-        )
-        if factor_peer_frame is not None and not factor_peer_frame.empty:
-            factor_peer_label, factor_peer_level = factor_peer_metadata
-            benchmark_data[factor_peer_label] = factor_peer_frame
-            print(
-                f"Loaded legacy benchmark {factor_peer_label}"
-                + (f" ({factor_peer_level})" if factor_peer_level else "")
-                + f" from {factor_peer_cache_path}"
-            )
-        elif auto_build_factor_peer_index:
-            try:
-                built_path, built_label, constituent_count = build_missing_factor_peer_index(
-                    factor_peer_lookup_symbol,
-                    peer_index_cache_dir,
-                    max_symbols=factor_peer_index_max_symbols,
-                )
-                factor_peer_frame, _, factor_peer_metadata = load_factor_peer_index(
-                    factor_peer_lookup_symbol, peer_index_cache_dir
-                )
-                if factor_peer_frame is None or factor_peer_frame.empty:
-                    raise ValueError("The generated peer index has no dates overlapping the asset history.")
-                benchmark_data[built_label] = factor_peer_frame
-                print(
-                    f"Built and loaded {built_label} from {constituent_count} GICS peers; "
-                    f"cached at {built_path}"
-                )
-            except Exception as exc:
-                print(
-                    f"Could not automatically build a peer index for {factor_peer_lookup_symbol}: {exc}. "
-                    f"Using {benchmark_tickers} only. For an ETF, set "
-                    "factor_peer_index_source_ticker to a representative company."
-                )
-        else:
-            print(
-                f"Peer index not found for {factor_peer_lookup_symbol}; using {benchmark_tickers} only."
-            )
+    for factor_level, (factor_frame, factor_meta) in factor_peer_refresh_results.items():
+        if not factor_frame.empty:
+            if not asset_history.empty:
+                factor_frame = factor_frame.loc[asset_history.index.min():asset_history.index.max()]
+            if not factor_frame.empty:
+                benchmark_data[factor_meta["label"]] = factor_frame
+        print(f"{factor_level}: {peer_status(factor_meta)}")
 
 #loaded_benchmark_tickers = list(benchmark_data)
 #analysis_index = asset_history.index
@@ -1065,121 +1026,32 @@ momentum_diagnostics_sources.update({
     for symbol, benchmark_frame in benchmark_data.items()
     if isinstance(benchmark_frame, pd.DataFrame) and "Close" in benchmark_frame
 })
-for symbol, close in momentum_diagnostics_sources.items():
-    # Only the default metric is needed during startup. Other metrics are
-    # calculated and cached when the user first selects them.
-    symbol_contexts = build_momentum_diagnostics_contexts(
-        close, ratio_types=("sharpe",)
-    )
-    for ratio_type, diagnostics_context in symbol_contexts.items():
-        momentum_diagnostics_contexts_by_ratio[ratio_type][symbol] = diagnostics_context
-
-# Original names remain Sharpe aliases so downstream notebook cells and the
-# current dashboard keep working while ratio-aware renderers are introduced.
-momentum_diagnostics_contexts = momentum_diagnostics_contexts_by_ratio["sharpe"]
-
-# Preserve the original single-asset names for downstream notebook cells.
-momentum_diagnostics_context = momentum_diagnostics_contexts[ticker_str]
-sharpe_table = momentum_diagnostics_context["sharpe_table"]
-volatility_df = momentum_diagnostics_context["volatility_df"]
-
-momentum_diagnostics_display_contexts = {
-    symbol: coerce_momentum_diagnostics_context(context)
-    for symbol, context in momentum_diagnostics_contexts.items()
-}
-momentum_diagnostics_display_contexts_by_ratio = {
-    "sharpe": momentum_diagnostics_display_contexts,
-    **{
-        ratio_type: {
-            symbol: coerce_momentum_diagnostics_context(context)
-            for symbol, context in ratio_contexts.items()
-        }
-        for ratio_type, ratio_contexts in momentum_diagnostics_contexts_by_ratio.items()
-        if ratio_type != "sharpe"
-    },
-}
+# Horizon diagnostics are built only when a horizon tab requests them.
+momentum_diagnostics_display_contexts_by_ratio = {}
+_momentum_diagnostics_lock = RLock()
 
 
-def _ensure_momentum_diagnostics_ratio(ratio_type):
-    """Build one metric's asset/benchmark contexts once, on first use."""
+def _ensure_momentum_diagnostics_ratio(ratio_type, symbols=None):
+    """Build only requested symbols; publish paired contexts atomically."""
     ratio_type = normalize_momentum_ratio_type(ratio_type)
-    ratio_contexts = momentum_diagnostics_contexts_by_ratio.setdefault(
-        ratio_type, {}
-    )
-    display_contexts = momentum_diagnostics_display_contexts_by_ratio.setdefault(
-        ratio_type, {}
-    )
-    for symbol, close in momentum_diagnostics_sources.items():
-        if symbol in ratio_contexts:
-            continue
-        context = build_momentum_diagnostics_context(
-            close, ratio_type=ratio_type
-        )
-        ratio_contexts[symbol] = context
-        display_contexts[symbol] = coerce_momentum_diagnostics_context(context)
-    return ratio_contexts, display_contexts
+    owners = dict.fromkeys([ticker_str, *(symbols or [])])
+    with _momentum_diagnostics_lock:
+        ratio_contexts = momentum_diagnostics_contexts_by_ratio.setdefault(ratio_type, {})
+        display_contexts = momentum_diagnostics_display_contexts_by_ratio.setdefault(ratio_type, {})
+        for symbol in owners:
+            if symbol in ratio_contexts or symbol not in momentum_diagnostics_sources:
+                continue
+            context = build_momentum_diagnostics_context(
+                momentum_diagnostics_sources[symbol], ratio_type=ratio_type
+            )
+            display_context = coerce_momentum_diagnostics_context(context)
+            ratio_contexts[symbol] = context
+            display_contexts[symbol] = display_context
+        return ratio_contexts, display_contexts
 
-fig_momentum_window_diagnostics_grid = plot_momentum_window_diagnostics_grid_view(
-    diagnostics_context=momentum_diagnostics_context,
-    ticker_label=ticker_str,
-)
 
 block11_benchmark_colors = ["#f97316", "#22c55e", "#facc15", "#ef4444", "#ec4899", "#f8fafc"]
 block11_benchmark_dashes = ["dash", "dot", "longdash", "dashdot", "solid"]
-
-for benchmark_index, (symbol, display_context) in enumerate(momentum_diagnostics_display_contexts.items()):
-    if symbol == ticker_str:
-        continue
-    color = block11_benchmark_colors[benchmark_index % len(block11_benchmark_colors)]
-    dash = block11_benchmark_dashes[benchmark_index % len(block11_benchmark_dashes)]
-
-    benchmark_current_sharpe_zscore = display_context["current_sharpe_zscore"].dropna()
-    if not benchmark_current_sharpe_zscore.empty:
-        fig_momentum_window_diagnostics_grid.add_trace(
-            go.Scatter(
-                x=benchmark_current_sharpe_zscore.index,
-                y=benchmark_current_sharpe_zscore.values,
-                mode="lines+markers",
-                name=f"{symbol} Current Sharpe Z-Score",
-                line=dict(color=color, width=2.2, dash=dash),
-                marker=dict(size=4),
-                hovertemplate=(
-                    "Benchmark: " + symbol + "<br>"
-                    "Window: %{x} day(s)<br>"
-                    "Current Sharpe Z-Score: %{y:.2f}<extra></extra>"
-                ),
-            ),
-            row=3,
-            col=1,
-        )
-        block11_add_horizon_derivative_traces(
-            fig_momentum_window_diagnostics_grid,
-            benchmark_current_sharpe_zscore,
-            symbol=symbol,
-            base_name=f"{symbol} Current Sharpe Z-Score",
-            color=color,
-            dash=dash,
-            rows=(4, 5),
-        )
-
-asset_display_context = momentum_diagnostics_display_contexts[ticker_str]
-row3_range_series = [
-    asset_display_context["current_sharpe_zscore"],
-    asset_display_context["sharpe_zscore_mean_by_window"],
-    *block11_reference_band_series(
-        asset_display_context["sharpe_zscore_mean_by_window"],
-        asset_display_context["sharpe_zscore_std_by_window"],
-    ),
-    *[
-        context["current_sharpe_zscore"]
-        for symbol, context in momentum_diagnostics_display_contexts.items()
-        if symbol != ticker_str
-    ],
-    pd.Series([-2.0, 2.0]),
-]
-fig_momentum_window_diagnostics_grid.update_yaxes(range=block11_axis_range(row3_range_series), row=3, col=1)
-block11_add_option_dte_vlines(fig_momentum_window_diagnostics_grid, block11_option_chain_dtes)
-fig = fig_momentum_window_diagnostics_grid
 
 
 # %% [notebook block 10]
@@ -1783,84 +1655,6 @@ fig_block10_drawdown_recovery = plot_candlestick_drawdown_recovery_view(
 fig = fig_block10_drawdown_recovery
 
 
-# %% [notebook block 12]
-# Block 13: visualize monthly and quarterly seasonality patterns
-
-ticker_quarterly_data = series_transforms.resample(asset_history, frequency="quarterly")
-ticker_quarterly_returns = ticker_quarterly_data["Close"].pct_change(fill_method=None).dropna()
-
-
-def _seasonality_metric_series(frequency, metric_type):
-    """Calculate one selected metric for every calendar month or quarter."""
-    metric_type = normalize_momentum_ratio_type(metric_type)
-    daily_returns = asset_history["Close"].pct_change(fill_method=None)
-    aligned_risk_free = risk_free_daily_rate.reindex(daily_returns.index).ffill().bfill()
-    if _is_correlation_metric(metric_type):
-        benchmark_symbol = _correlation_metric_symbol(metric_type)
-        benchmark_frame = benchmark_data.get(benchmark_symbol)
-        if benchmark_frame is None or "Close" not in benchmark_frame:
-            raise ValueError(f"No benchmark Close history is available for {benchmark_symbol}.")
-        benchmark_returns = benchmark_frame["Close"].pct_change(fill_method=None)
-        observations = pd.concat(
-            [daily_returns.rename("asset"), benchmark_returns.rename("benchmark")],
-            axis=1,
-        ).dropna()
-    else:
-        benchmark_returns = None
-        observations = (
-        daily_returns
-        if metric_type in {"return", "volatility", "downside_volatility"}
-        else daily_returns - aligned_risk_free
-        )
-
-    def period_metric(values):
-        if _is_correlation_metric(metric_type):
-            values = pd.DataFrame(values).dropna()
-            return values["asset"].corr(values["benchmark"]) if len(values) >= 2 else np.nan
-        values = pd.Series(values).dropna()
-        if values.empty:
-            return np.nan
-        if metric_type == "return":
-            return (1.0 + values).prod() - 1.0
-        if len(values) < 2:
-            return np.nan
-        if metric_type == "volatility":
-            return np.sqrt(annualization_factor) * values.std()
-        if metric_type == "downside_volatility":
-            return np.sqrt(
-                annualization_factor * values.where(values < 0, 0.0).pow(2).mean()
-            )
-        mean_return = values.mean()
-        if metric_type == "sharpe":
-            denominator = values.std()
-        else:
-            denominator = values.where(values < 0, 0.0).pow(2).mean() ** 0.5
-        return np.sqrt(annualization_factor) * mean_return / denominator if denominator > 0 else np.nan
-
-    if _is_correlation_metric(metric_type):
-        return observations.resample(frequency).apply(period_metric).dropna()
-    return observations.resample(frequency).apply(period_metric).dropna()
-
-
-def _block18_seasonality_figure(metric_type="sharpe"):
-    metric_type = normalize_momentum_ratio_type(metric_type)
-    metric_label = momentum_ratio_label(metric_type)
-    return plot_seasonality_stack_view(
-        monthly_returns=_seasonality_metric_series("ME", metric_type),
-        quarterly_returns=_seasonality_metric_series("QE", metric_type),
-        ticker_label=ticker_str,
-        as_of=asset_history.index.max(),
-        metric_label=metric_label,
-    )
-
-fig_ticker_seasonality_stack = plot_seasonality_stack_view(
-    monthly_returns=ticker_monthly_returns,
-    quarterly_returns=ticker_quarterly_returns,
-    ticker_label=ticker_str,
-    as_of=asset_history.index.max(),
-)
-
-
 # %% [notebook block 13]
 # Block 14: compute Sharpe/Sortino ratios and spreads
 
@@ -1917,7 +1711,10 @@ def rolling_risk_components(close, window):
 
 def zscore_or_empty(series):
     clean = pd.Series(series).dropna()
-    return calculate_zscore(clean).dropna() if not clean.empty else pd.Series(dtype=float)
+    if clean.empty:
+        return pd.Series(dtype=float)
+    offsets = globals().get("block18_display_range_offsets", {})
+    return _normalize_zscore(clean, offsets).dropna()
 
 asset_sharpe_map = {}
 asset_sortino_map = {}
@@ -2084,13 +1881,8 @@ from Quantapp.visualization.views.single_asset_profile.pricing.momentum_efficien
 )
 
 def benchmark_zscore_for_plot(series):
-    clean = pd.Series(series).dropna().sort_index()
-    if clean.empty:
-        return pd.Series(dtype=float)
-    zscore_series = calculate_zscore(clean)
-    if zscore_series.isna().all():
-        return pd.Series(0.0, index=clean.index)
-    return zscore_series.dropna()
+    return zscore_or_empty(series)
+
 
 def _block18_close_series(frame_or_series, label):
     if isinstance(frame_or_series, pd.DataFrame):
@@ -2612,7 +2404,7 @@ def _block18_functional_horizon_profile_figure(
         if source_range is not None:
             profile.layout[target_axis].range = source_range
     profile.update_layout(
-        title=f"{ticker_str} {ratio_label} Functional Horizon Profile",
+        title=f"{ticker_str} {ratio_label} Horizon Snapshot",
         template="plotly_dark", height=1120,
         margin=dict(t=90, r=35, b=55, l=75),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -2765,22 +2557,15 @@ block18_default_ratio_type = "sharpe"
 block18_ratio_options = [
     {"label": "Sharpe Ratio", "value": "sharpe"},
     {"label": "Sortino Ratio", "value": "sortino"},
-    {"label": "Return", "value": "return"},
-    {"label": "Volatility", "value": "volatility"},
-    {"label": "Downside Volatility", "value": "downside_volatility"},
-] + [
-    {
-        "label": f"Correlation vs {symbol}",
-        "value": f"{CORRELATION_METRIC_PREFIX}{symbol}",
-    }
-    for symbol in benchmark_order
-] + [
-    {
-        "label": f"{metric_name.title()} Ratio vs {symbol}",
-        "value": f"{metric_name}::{symbol}",
-    }
-    for metric_name in BENCHMARK_RELATIVE_METRIC_PREFIXES
-    for symbol in benchmark_order
+    *[
+        {"label": label, "value": value, "disabled": not bool(benchmark_order)}
+        for label, value in [
+            ("Correlation", "correlation"),
+            ("Information Ratio", "information"),
+            ("Appraisal Ratio", "appraisal"),
+            ("Treynor Ratio", "treynor"),
+        ]
+    ],
 ]
 block18_default_benchmark_selection = ["SPY"] if "SPY" in benchmark_order else (
     [default_benchmark] if default_benchmark else []
@@ -2795,22 +2580,12 @@ def _block18_ratio_label(ratio_type):
     return momentum_ratio_label(_block18_normalize_ratio_type(ratio_type))
 
 
-block18_playback_dates = pd.DatetimeIndex([])
-for _ratio_contexts in momentum_diagnostics_contexts_by_ratio.values():
-    _asset_ratio_context = _ratio_contexts.get(ticker_str)
-    if _asset_ratio_context is None:
-        continue
-    _ratio_dates = pd.DatetimeIndex(
-        pd.to_datetime(
-            pd.DataFrame(_asset_ratio_context["ratio_table"])
-            .dropna(how="all")
-            .index,
-            errors="coerce",
-            utc=True,
-        )
-    ).dropna().tz_convert(None).normalize()
-    block18_playback_dates = block18_playback_dates.union(_ratio_dates)
-block18_playback_dates = block18_playback_dates.unique().sort_values()
+# Derive the playback calendar without computing every horizon's metrics.
+_playback_close = asset_history["Close"].dropna().sort_index()
+block18_playback_dates = pd.DatetimeIndex(pd.to_datetime(
+    _playback_close.index, errors="coerce", utc=True
+)).dropna().tz_convert(None).normalize().unique().sort_values()
+block18_playback_dates = block18_playback_dates[min(window_sizes):]
 if block18_playback_dates.empty:
     raise ValueError("Block 18 playback needs at least one valid diagnostics date.")
 block18_today = pd.Timestamp.today().normalize()
@@ -2921,29 +2696,31 @@ block18_display_range_offsets = {
     "3m": pd.DateOffset(months=3),
 }
 block18_tab_config = {
-    "historical_surface_3d": {"label": "Historical Ratio Surface", "height": 1200, "accent": "#06b6d4", "tab_color": "rgba(6, 182, 212, 0.16)", "selected_tab_color": "rgba(6, 182, 212, 0.30)"},
-    "window_diagnostics": {"label": "Functional Horizon Profile", "height": 1900, "accent": "#f59e0b", "tab_color": "rgba(245, 158, 11, 0.16)", "selected_tab_color": "rgba(245, 158, 11, 0.30)"},
-    "risk": {"label": "Risk & Compounding", "height": 1610, "accent": "#60a5fa", "tab_color": "rgba(96, 165, 250, 0.16)", "selected_tab_color": "rgba(96, 165, 250, 0.30)"},
-    "risk_compounding_v2": {"label": "Risk & Compounding v.2", "height": 3700, "accent": "#818cf8", "tab_color": "rgba(129, 140, 248, 0.16)", "selected_tab_color": "rgba(129, 140, 248, 0.30)"},
-    "kappa": {"label": "Kappa Profile", "height": 1450, "accent": "#a78bfa", "tab_color": "rgba(167, 139, 250, 0.16)", "selected_tab_color": "rgba(167, 139, 250, 0.30)"},
+    "historical_surface_3d": {"label": "Historical Horizon Surface", "height": 1200, "accent": "#06b6d4", "tab_color": "rgba(6, 182, 212, 0.16)", "selected_tab_color": "rgba(6, 182, 212, 0.30)"},
+    "window_diagnostics": {"label": "Horizon Snapshot", "height": 1900, "accent": "#f59e0b", "tab_color": "rgba(245, 158, 11, 0.16)", "selected_tab_color": "rgba(245, 158, 11, 0.30)"},
+    "risk": {"label": "Historical Window Profile", "height": 1610, "accent": "#60a5fa", "tab_color": "rgba(96, 165, 250, 0.16)", "selected_tab_color": "rgba(96, 165, 250, 0.30)"},
+    "risk_compounding_v2": {"label": "Historical Window Profile", "height": 3700, "accent": "#818cf8", "tab_color": "rgba(129, 140, 248, 0.16)", "selected_tab_color": "rgba(129, 140, 248, 0.30)"},
+    "kappa": {"label": "Kappa Profile", "height": 2400, "accent": "#a78bfa", "tab_color": "rgba(167, 139, 250, 0.16)", "selected_tab_color": "rgba(167, 139, 250, 0.30)"},
     "pezier_white": {"label": "Pézier–White", "height": 1500, "accent": "#10b981", "tab_color": "rgba(16, 185, 129, 0.16)", "selected_tab_color": "rgba(16, 185, 129, 0.30)"},
     "systematic_risk": {"label": "Systematic Risk", "height": 1550, "accent": "#eab308", "tab_color": "rgba(234, 179, 8, 0.16)", "selected_tab_color": "rgba(234, 179, 8, 0.30)"},
-    "cornish_fisher": {"label": "Cornish–Fisher", "height": 1900, "accent": "#ec4899", "tab_color": "rgba(236, 72, 153, 0.16)", "selected_tab_color": "rgba(236, 72, 153, 0.30)"},
+    "cornish_fisher": {"label": "Cornish–Fisher", "height": 2250, "accent": "#ec4899", "tab_color": "rgba(236, 72, 153, 0.16)", "selected_tab_color": "rgba(236, 72, 153, 0.30)"},
     "autocorrelation": {"label": "Time Dependency", "height": 1000, "accent": "#38bdf8", "tab_color": "rgba(56, 189, 248, 0.16)", "selected_tab_color": "rgba(56, 189, 248, 0.30)"},
     "first_passage": {"label": "First Passage", "height": 1550, "accent": "#f43f5e", "tab_color": "rgba(244, 63, 94, 0.16)", "selected_tab_color": "rgba(244, 63, 94, 0.30)"},
-    "drawdown": {"label": "Price Chart", "height": 1650, "accent": "#f87171"},
-    "seasonality": {"label": "Seasonality", "height": 850, "accent": "#34d399"},
-    "correlation": {"label": "Rolling Correlation", "height": 850, "accent": "#38bdf8"},
+    "drawdown": {"label": "Price Chart", "height": 2100, "accent": "#f87171"},
     "volatility_efficiency": {"label": "Volatility, Efficiency & Distribution", "height": 2050, "accent": "#fb7185"},
+    "garch": {"label": "GARCH Volatility", "height": 900, "accent": "#f97316"},
 }
 block18_default_tab = "drawdown"
-block18_tab_order = ["drawdown", "historical_surface_3d", "window_diagnostics", "risk", "risk_compounding_v2", "systematic_risk", "kappa", "pezier_white", "cornish_fisher", "autocorrelation", "first_passage", "seasonality", "correlation", "volatility_efficiency"]
+block18_tab_order = ["drawdown", "historical_surface_3d", "window_diagnostics", "risk_compounding_v2", "systematic_risk", "kappa", "pezier_white", "cornish_fisher", "volatility_efficiency", "garch"]
+block18_zscore_baseline_tabs = frozenset({
+    "risk", "risk_compounding_v2", "systematic_risk", "first_passage",
+    "window_diagnostics", "historical_surface_3d",
+})
 block18_ratio_dependent_tabs = {
-    "historical_surface_3d", "window_diagnostics", "risk", "seasonality"
+    "historical_surface_3d", "window_diagnostics", "risk", "systematic_risk"
 }
-block18_date_range_tabs = {"risk", "systematic_risk", "pezier_white", "cornish_fisher", "first_passage", "drawdown", "correlation", "volatility_efficiency"}
+block18_date_range_tabs = {"risk", "systematic_risk", "kappa", "pezier_white", "cornish_fisher", "first_passage", "drawdown", "volatility_efficiency", "garch"}
 block18_native_axis_status = {
-    "seasonality": "Native seasonal axes",
     "historical_surface_3d": "3D date/lookback-horizon axes",
     "window_diagnostics": "Native lookback-horizon/DTE axes",
 }
@@ -3056,16 +2833,59 @@ def _block18_apply_display_range(
     display_range_value,
     *,
     preserve_benchmark_selector=False,
+    preserve_all_controls=False,
     as_of_date=None,
     show_playhead=False,
 ):
     figure = _block18_strip_figure_controls(
-        figure, preserve_benchmark_selector=preserve_benchmark_selector
+        figure,
+        preserve_benchmark_selector=preserve_benchmark_selector,
+        preserve_all_controls=preserve_all_controls,
     )
     display_range_value = display_range_value if display_range_value in block18_display_range_offsets else block18_default_display_range
-    date_start, date_end = trace_datetime_bounds(figure.data)
-    if date_start is None or date_end is None:
+    x_date_start, x_date_end = trace_datetime_bounds(figure.data)
+    date_xaxis_names = set()
+    for trace in figure.data:
+        x_values = getattr(trace, "x", None)
+        if x_values is None or len(x_values) == 0:
+            continue
+        x_index = pd.Index(x_values)
+        if pd.api.types.is_numeric_dtype(x_index.dtype):
+            continue
+        x_dates = pd.to_datetime(x_index, errors="coerce")
+        if len(x_dates) == 0 or pd.isna(x_dates).all():
+            continue
+        axis_reference = getattr(trace, "xaxis", None) or "x"
+        axis_suffix = str(axis_reference)[1:]
+        date_xaxis_names.add("xaxis" + axis_suffix)
+    surface_date_bounds = {}
+    for trace in figure.data:
+        if getattr(trace, "type", None) != "surface":
+            continue
+        y_values = getattr(trace, "y", None)
+        if y_values is None or len(y_values) == 0:
+            continue
+        y_dates = pd.to_datetime(pd.Index(y_values), errors="coerce")
+        y_dates = y_dates[~pd.isna(y_dates)]
+        if len(y_dates) == 0:
+            continue
+        scene_name = getattr(trace, "scene", None) or "scene"
+        scene_start = pd.Timestamp(y_dates.min())
+        scene_end = pd.Timestamp(y_dates.max())
+        if scene_name in surface_date_bounds:
+            prior_start, prior_end = surface_date_bounds[scene_name]
+            scene_start = min(prior_start, scene_start)
+            scene_end = max(prior_end, scene_end)
+        surface_date_bounds[scene_name] = (scene_start, scene_end)
+
+    date_starts = [bound for bound in [x_date_start] if bound is not None]
+    date_ends = [bound for bound in [x_date_end] if bound is not None]
+    date_starts.extend(start for start, _ in surface_date_bounds.values())
+    date_ends.extend(end for _, end in surface_date_bounds.values())
+    if not date_starts or not date_ends:
         return figure
+    date_start = min(date_starts)
+    date_end = max(date_ends)
 
     effective_end = date_end
     if as_of_date is not None:
@@ -3077,9 +2897,18 @@ def _block18_apply_display_range(
 
     offset = block18_display_range_offsets[display_range_value]
     range_start = date_start if offset is None else max(date_start, effective_end - offset)
-    for axis_name in figure.layout.to_plotly_json():
-        if axis_name.startswith("xaxis"):
-            figure.layout[axis_name].update(range=[range_start, effective_end])
+    if x_date_start is not None and x_date_end is not None:
+        for axis_name in date_xaxis_names:
+            if hasattr(figure.layout, axis_name):
+                figure.layout[axis_name].update(range=[range_start, effective_end])
+    for scene_name in surface_date_bounds:
+        scene = getattr(figure.layout, scene_name, None)
+        if scene is not None:
+            scene.yaxis.update(
+                type="date",
+                range=[range_start, effective_end],
+                autorange=False,
+            )
 
     if show_playhead:
         figure.add_shape(
@@ -3105,7 +2934,7 @@ def _block18_apply_display_range(
             font={"color": "#facc15", "size": 11},
             bgcolor="rgba(15, 23, 42, 0.80)",
         )
-    return figure
+    return _finish_zscore_figure(figure)
 
 def _block18_build_term_config_for_window(window):
     label = f"{window}-day"
@@ -3280,7 +3109,6 @@ def _block18_volatility_efficiency_figure(window):
     autocorrelation = returns.rolling(efficiency_window).corr(returns.shift(1))
     hurst = returns.rolling(efficiency_window).apply(_block18_hurst_rs, raw=True)
     vol_of_vol = volatility.rolling(vol_of_vol_window).std()
-    garch_volatility = _block18_rolling_garch11_volatility(returns, selected_window)
     metrics = pd.concat({
         "Volatility": volatility,
         "Entropy": entropy,
@@ -3300,8 +3128,6 @@ def _block18_volatility_efficiency_figure(window):
     for row, (column, color) in enumerate(zip(metrics.columns, colors), start=1):
         trace_name = f"{selected_window}-Day Trailing Realized Volatility" if column == "Volatility" else column
         figure.add_trace(go.Scatter(x=metrics.index, y=metrics[column], name=trace_name, mode="lines", line=dict(color=color, width=1.5), showlegend=column == "Volatility"), row=row, col=1)
-        if row == 1:
-            figure.add_trace(go.Scatter(x=garch_volatility.index, y=garch_volatility, name=f"Rolling GARCH(1,1), {selected_window}-Day Fit, 1-Day Forecast", mode="lines", line=dict(color="#f97316", width=1.5), showlegend=True), row=1, col=1)
     figure.add_hline(y=1.0, line_dash="dot", line_color="#64748b", row=2, col=1)
     figure.add_hline(y=0.0, line_dash="dot", line_color="#64748b", row=3, col=1)
     figure.add_hline(y=0.5, line_dash="dot", line_color="#64748b", row=4, col=1)
@@ -3310,7 +3136,59 @@ def _block18_volatility_efficiency_figure(window):
     figure.update_yaxes(title_text="Correlation", range=[-1, 1], row=3, col=1)
     figure.update_yaxes(title_text="H", row=4, col=1)
     figure.update_yaxes(title_text="Percentage pts", row=5, col=1)
-    figure.update_layout(title=f"{ticker_str} - Volatility & Market Efficiency", template="plotly_dark", height=1200, hovermode="x unified", showlegend=False, margin=dict(t=90, r=30, b=45, l=80))
+    figure.update_layout(title=f"{ticker_str} - Realized Volatility & Market Efficiency", template="plotly_dark", height=1200, hovermode="x unified", showlegend=False, margin=dict(t=90, r=30, b=45, l=80))
+    return figure
+
+
+def _block18_garch_volatility_figure(window):
+    """Show rolling GARCH separately so other diagnostics do not wait for fits."""
+    selected_window = _block18_validate_window(window)
+    close = pd.to_numeric(asset_history["Close"], errors="coerce").dropna().sort_index()
+    log_returns = np.log(close).diff().dropna()
+    if len(log_returns) < selected_window:
+        raise ValueError(
+            f"GARCH Volatility needs at least {selected_window:,} clean returns."
+        )
+    realized_volatility = (
+        log_returns.rolling(selected_window).std(ddof=1) * np.sqrt(252.0) * 100.0
+    )
+    garch_volatility = _block18_rolling_garch11_volatility(
+        log_returns, selected_window
+    )
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=realized_volatility.index,
+            y=realized_volatility,
+            name=f"{selected_window}-Day Realized Volatility",
+            mode="lines",
+            line={"color": "#38bdf8", "width": 1.8},
+            hovertemplate="Realized volatility: %{y:.2f}%<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=garch_volatility.index,
+            y=garch_volatility,
+            name=f"Rolling GARCH(1,1), {selected_window}-Day Fit, 1-Day Forecast",
+            mode="lines",
+            line={"color": "#f97316", "width": 2.0},
+            hovertemplate="GARCH forecast volatility: %{y:.2f}%<extra></extra>",
+        )
+    )
+    figure.update_layout(
+        title=(
+            f"{ticker_str} Rolling GARCH(1,1) Volatility — {selected_window}-Day Fits<br>"
+            "<sup>This tab performs the computationally intensive rolling model fits only when selected</sup>"
+        ),
+        template="plotly_dark",
+        height=900,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1.0},
+        margin={"t": 115, "r": 35, "b": 50, "l": 80},
+    )
+    figure.update_xaxes(title_text="Window end date")
+    figure.update_yaxes(title_text="Annualized volatility (%)")
     return figure
 
 def _block18_return_distribution_figure(window):
@@ -3349,6 +3227,219 @@ def _block18_return_distribution_figure(window):
         include_return_panel=False,
     )
 
+
+def _block18_latest_return_distribution_panel(window):
+    """Compare the latest trailing return sample with a matched normal density."""
+    distribution_window = _block18_validate_window(window)
+    close = coerce_close_series(asset_history["Close"])
+    daily_returns = close.pct_change(fill_method=None).replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+    if len(daily_returns) < distribution_window:
+        raise ValueError(
+            f"Return Distribution needs at least {distribution_window:,} clean returns."
+        )
+    sample = daily_returns.tail(distribution_window)
+    sample_mean = float(sample.mean())
+    sample_std = float(sample.std(ddof=1))
+    if not np.isfinite(sample_std) or sample_std <= 0.0:
+        raise ValueError("Return Distribution requires non-zero return variability.")
+
+    sample_percent = sample.to_numpy(dtype=float) * 100.0
+    mean_percent = sample_mean * 100.0
+    std_percent = sample_std * 100.0
+    q25, q75 = np.nanpercentile(sample_percent, [25.0, 75.0])
+    iqr = float(q75 - q25)
+    data_span = float(np.nanmax(sample_percent) - np.nanmin(sample_percent))
+    bin_width = 2.0 * iqr / np.cbrt(len(sample_percent)) if iqr > 0.0 else np.nan
+    suggested_bins = (
+        int(np.ceil(data_span / bin_width))
+        if np.isfinite(bin_width) and bin_width > 0.0 and data_span > 0.0
+        else int(np.ceil(np.sqrt(len(sample_percent))))
+    )
+    bin_count = int(np.clip(suggested_bins, 20, 80))
+
+    baseline_min = mean_percent - 4.5 * std_percent
+    baseline_max = mean_percent + 4.5 * std_percent
+    x_min = min(float(np.nanmin(sample_percent)), baseline_min)
+    x_max = max(float(np.nanmax(sample_percent)), baseline_max)
+    baseline_x = np.linspace(x_min, x_max, 500)
+    baseline_density = scipy_normal.pdf(
+        baseline_x, loc=mean_percent, scale=std_percent
+    )
+
+    figure = go.Figure()
+    figure.add_trace(
+        go.Histogram(
+            x=sample_percent,
+            histnorm="probability density",
+            nbinsx=bin_count,
+            name="Observed daily returns",
+            marker={
+                "color": "rgba(56, 189, 248, 0.58)",
+                "line": {"color": "rgba(125, 211, 252, 0.85)", "width": 0.7},
+            },
+            hovertemplate="Return bin: %{x:.2f}%<br>Density: %{y:.3f}<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=baseline_x,
+            y=baseline_density,
+            name="Matched normal baseline",
+            mode="lines",
+            line={"color": "#f97316", "width": 2.6},
+            hovertemplate="Normal density at %{x:.2f}%: %{y:.3f}<extra></extra>",
+        )
+    )
+    figure.add_vline(
+        x=mean_percent, line_dash="dot", line_color="#f8fafc", line_width=1.4
+    )
+    figure.update_layout(
+        title=(
+            f"{ticker_str} Latest {distribution_window}-Day Return Distribution vs Normal Baseline<br>"
+            f"<sup>{sample.index[0]:%Y-%m-%d} to {sample.index[-1]:%Y-%m-%d} | "
+            f"normal baseline matched to mean {mean_percent:+.3f}% and volatility {std_percent:.3f}%</sup>"
+        ),
+        template="plotly_dark",
+        height=680,
+        bargap=0.035,
+        hovermode="x unified",
+        showlegend=True,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1.0},
+        margin={"t": 88, "r": 25, "b": 55, "l": 70},
+    )
+    figure.update_xaxes(title_text="Daily return (%)")
+    figure.update_yaxes(title_text="Probability density")
+    return _block18_apply_typography(figure)
+
+
+def _block18_return_distribution_surface(window, display_range_value):
+    """Compare empirical and matched normal return densities through time."""
+    distribution_window = _block18_validate_window(window)
+    close = coerce_close_series(asset_history["Close"])
+    daily_returns = close.pct_change(fill_method=None).replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+    if len(daily_returns) < distribution_window:
+        raise ValueError(
+            f"Return Distribution Surface needs at least {distribution_window:,} clean returns."
+        )
+
+    return_percent = daily_returns.to_numpy(dtype=float) * 100.0
+    eligible_endpoint_positions = np.arange(distribution_window - 1, len(daily_returns))
+    surface_endpoint_count = min(260, len(eligible_endpoint_positions))
+    selected_positions = np.unique(
+        np.linspace(
+            eligible_endpoint_positions[0],
+            eligible_endpoint_positions[-1],
+            surface_endpoint_count,
+            dtype=int,
+        )
+    )
+
+    lower_bound, upper_bound = np.nanquantile(return_percent, [0.005, 0.995])
+    if not np.isfinite(lower_bound) or not np.isfinite(upper_bound) or lower_bound >= upper_bound:
+        lower_bound = float(np.nanmin(return_percent))
+        upper_bound = float(np.nanmax(return_percent))
+    if lower_bound >= upper_bound:
+        raise ValueError("Return Distribution Surface requires non-zero return variability.")
+
+    bin_edges = np.linspace(float(lower_bound), float(upper_bound), 61)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    bin_width = float(bin_edges[1] - bin_edges[0])
+    smoothing_kernel = np.asarray([0.06136, 0.24477, 0.38774, 0.24477, 0.06136])
+    density_rows = []
+    normal_density_rows = []
+    surface_dates = []
+    clipping_epsilon = max(abs(bin_width) * 1e-6, np.finfo(float).eps)
+    for endpoint_position in selected_positions:
+        trailing_sample = return_percent[
+            endpoint_position - distribution_window + 1:endpoint_position + 1
+        ]
+        # Match the 2D baseline using the original, unclipped trailing returns.
+        sample_mean = float(np.mean(trailing_sample))
+        sample_std = float(np.std(trailing_sample, ddof=1))
+        normal_density_rows.append(
+            scipy_normal.pdf(bin_centers, loc=sample_mean, scale=sample_std)
+            if np.isfinite(sample_std) and sample_std > 0.0
+            else np.full_like(bin_centers, np.nan)
+        )
+        clipped_sample = np.clip(
+            trailing_sample,
+            bin_edges[0] + clipping_epsilon,
+            bin_edges[-1] - clipping_epsilon,
+        )
+        density = np.histogram(
+            clipped_sample, bins=bin_edges, density=True
+        )[0].astype(float)
+        density = np.convolve(density, smoothing_kernel, mode="same")
+        density_mass = float(np.sum(density) * bin_width)
+        if density_mass > 0.0:
+            density = density / density_mass
+        density_rows.append(density)
+        surface_dates.append(daily_returns.index[endpoint_position])
+
+    surface_dates = pd.DatetimeIndex(surface_dates)
+    density_surface = np.asarray(density_rows, dtype=float)
+    figure = go.Figure(
+        go.Surface(
+            x=bin_centers,
+            y=surface_dates,
+            z=density_surface,
+            name="Rolling empirical density",
+            colorscale="Viridis",
+            opacity=0.80,
+            showlegend=True,
+            colorbar={"title": "Density", "len": 0.72},
+            hovertemplate=(
+                "Return: %{x:.2f}%<br>"
+                "Window end: %{y|%Y-%m-%d}<br>"
+                "Density: %{z:.3f}<extra></extra>"
+            ),
+        )
+    )
+    figure.add_trace(
+        go.Surface(
+            x=bin_centers,
+            y=surface_dates,
+            z=np.asarray(normal_density_rows, dtype=float),
+            name="Matched normal baseline",
+            colorscale=[[0, "#f97316"], [1, "#f97316"]],
+            opacity=0.60,
+            showscale=False,
+            showlegend=True,
+            connectgaps=False,
+            hovertemplate=(
+                "Return: %{x:.2f}%<br>"
+                "Window end: %{y|%Y-%m-%d}<br>"
+                "Normal density: %{z:.3f}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=(
+            f"{ticker_str} Rolling {distribution_window}-Day Return Distribution Surface<br>"
+            "<sup>Fixed return bins make density shapes comparable through time; "
+            "orange = normal fit to each window; extreme 0.5% tails retained in boundary bins</sup>"
+        ),
+        template="plotly_dark",
+        height=680,
+        showlegend=True,
+        legend={"orientation": "h", "y": -0.05, "x": 0},
+        margin={"t": 105, "r": 45, "b": 25, "l": 45},
+        scene={
+            "xaxis_title": "Daily return (%)",
+            "yaxis_title": "Window end date",
+            "zaxis_title": "Probability density",
+            "aspectmode": "auto",
+            "camera": {"eye": {"x": 1.45, "y": -1.55, "z": 0.9}},
+        },
+    )
+    return _block18_apply_typography(
+        _block18_apply_display_range(figure, display_range_value)
+    )
+
 def _block18_volatility_efficiency_distribution_figure(window):
     volatility_figure = _block18_volatility_efficiency_figure(window)
     distribution_figure = _block18_return_distribution_figure(window)
@@ -3374,7 +3465,7 @@ def _block18_volatility_efficiency_distribution_figure(window):
         ],
         subplot_titles=subplot_titles, row_heights=[0.16, 0.16, 0.17, 0.17, 0.17, 0.17],
     )
-    volatility_positions = [(1, 1), (1, 1), (1, 2), (2, 1), (2, 2), (3, 1)]
+    volatility_positions = [(1, 1), (1, 2), (2, 1), (2, 2), (3, 1)]
     for trace, (row, col) in zip(volatility_figure.data, volatility_positions):
         combined.add_trace(copy.deepcopy(trace), row=row, col=col)
     distribution_axis_rows = {"x": 4, "x2": 5, "x3": 6}
@@ -3463,12 +3554,148 @@ def _block18_kappa_profile_figure(window):
         "Total Lp ratio": total_lp_ratios,
         "Total Lp scale": total_lp_scales,
     })
+
+    # Evaluate the same order profiles at rolling endpoints through history. The
+    # surfaces are sampled in time to keep the browser payload responsive; every
+    # displayed point still uses the complete selected trailing window.
+    historical_sample = pd.concat(
+        {"return": returns, "mar": periodic_mar}, axis=1
+    ).replace([np.inf, -np.inf], np.nan).dropna()
+    eligible_endpoint_count = len(historical_sample) - window + 1
+    surface_endpoint_count = min(300, eligible_endpoint_count)
+    surface_endpoint_positions = np.unique(
+        np.linspace(
+            window - 1,
+            len(historical_sample) - 1,
+            surface_endpoint_count,
+            dtype=int,
+        )
+    )
+    surface_dates = []
+    surface_mean_excess = []
+    downside_kappa_surface = []
+    downside_scale_surface = []
+    total_lp_ratio_surface = []
+    total_lp_scale_surface = []
+    inverse_orders = 1.0 / orders
+    for endpoint_position in surface_endpoint_positions:
+        rolling_sample = historical_sample.iloc[
+            endpoint_position - window + 1:endpoint_position + 1
+        ]
+        rolling_returns = rolling_sample["return"].to_numpy(dtype=float)
+        rolling_excess = (
+            rolling_sample["return"] - rolling_sample["mar"]
+        ).to_numpy(dtype=float)
+        rolling_mean_excess = float(np.mean(rolling_excess))
+        rolling_shortfall = np.clip(-rolling_excess, 0.0, None)
+        rolling_centered_returns = rolling_returns - float(np.mean(rolling_returns))
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            rolling_downside_scales = np.power(
+                np.mean(np.power(rolling_shortfall[:, None], orders[None, :]), axis=0),
+                inverse_orders,
+            )
+            rolling_total_lp_scales = np.power(
+                np.mean(
+                    np.power(np.abs(rolling_centered_returns)[:, None], orders[None, :]),
+                    axis=0,
+                ),
+                inverse_orders,
+            )
+            rolling_downside_kappas = np.divide(
+                rolling_mean_excess,
+                rolling_downside_scales,
+                out=np.full(len(orders), np.nan),
+                where=rolling_downside_scales > 0,
+            )
+            rolling_total_lp_ratios = np.divide(
+                rolling_mean_excess,
+                rolling_total_lp_scales,
+                out=np.full(len(orders), np.nan),
+                where=rolling_total_lp_scales > 0,
+            )
+        surface_dates.append(historical_sample.index[endpoint_position])
+        surface_mean_excess.append(rolling_mean_excess)
+        downside_kappa_surface.append(rolling_downside_kappas)
+        downside_scale_surface.append(rolling_downside_scales)
+        total_lp_ratio_surface.append(rolling_total_lp_ratios)
+        total_lp_scale_surface.append(rolling_total_lp_scales)
+
+    surface_dates = pd.DatetimeIndex(surface_dates)
+    surface_mean_excess = np.asarray(surface_mean_excess, dtype=float)
+    downside_kappa_surface = np.asarray(downside_kappa_surface, dtype=float)
+    downside_scale_surface = np.asarray(downside_scale_surface, dtype=float)
+    total_lp_ratio_surface = np.asarray(total_lp_ratio_surface, dtype=float)
+    total_lp_scale_surface = np.asarray(total_lp_scale_surface, dtype=float)
+    surface_mean_excess_grid = np.repeat(
+        surface_mean_excess[:, None], len(orders), axis=1
+    )
+
+    def _functional_level(surface):
+        return np.nanmean(np.asarray(surface, dtype=float), axis=1)
+
+    def _functional_slope(surface):
+        slope_values = []
+        for profile_values in np.asarray(surface, dtype=float):
+            valid = np.isfinite(profile_values)
+            if valid.sum() < 2:
+                slope_values.append(np.nan)
+                continue
+            valid_orders = orders[valid]
+            valid_profile = profile_values[valid]
+            centered_orders = valid_orders - float(np.mean(valid_orders))
+            denominator = float(np.dot(centered_orders, centered_orders))
+            slope_values.append(
+                float(
+                    np.dot(
+                        centered_orders,
+                        valid_profile - float(np.mean(valid_profile)),
+                    ) / denominator
+                )
+                if denominator > 0
+                else np.nan
+            )
+        return np.asarray(slope_values, dtype=float)
+
+    downside_level_history = _functional_level(downside_kappa_surface)
+    total_lp_level_history = _functional_level(total_lp_ratio_surface)
+    downside_slope_history = _functional_slope(downside_kappa_surface)
+    total_lp_slope_history = _functional_slope(total_lp_ratio_surface)
+    downside_level_zscore_history = calculate_zscore(
+        pd.Series(downside_level_history, index=surface_dates)
+    ).to_numpy(dtype=float)
+    total_lp_level_zscore_history = calculate_zscore(
+        pd.Series(total_lp_level_history, index=surface_dates)
+    ).to_numpy(dtype=float)
+    downside_slope_zscore_history = calculate_zscore(
+        pd.Series(downside_slope_history, index=surface_dates)
+    ).to_numpy(dtype=float)
+    total_lp_slope_zscore_history = calculate_zscore(
+        pd.Series(total_lp_slope_history, index=surface_dates)
+    ).to_numpy(dtype=float)
+    current_downside_level = float(np.nanmean(kappa_frame["Downside Kappa"]))
+    current_total_lp_level = float(np.nanmean(kappa_frame["Total Lp ratio"]))
+    current_downside_level_zscore = float(downside_level_zscore_history[-1])
+    current_total_lp_level_zscore = float(total_lp_level_zscore_history[-1])
+
     figure = make_subplots(
-        rows=2,
-        cols=1,
-        specs=[[{"type": "xy"}], [{"type": "table"}]],
-        row_heights=[0.40, 0.60],
-        vertical_spacing=0.10,
+        rows=4,
+        cols=2,
+        specs=[
+            [{"type": "xy", "colspan": 2}, None],
+            [{"type": "surface", "colspan": 2}, None],
+            [{"type": "xy"}, {"type": "xy"}],
+            [{"type": "table", "colspan": 2}, None],
+        ],
+        subplot_titles=(
+            "Current Trailing-Window Profiles & Functional Levels",
+            "Historical Functional Surface",
+            "Historical Functional Level Z-Score",
+            "Historical Functional Slope Z-Score",
+            "Current Trailing-Window Values",
+        ),
+        row_heights=[0.20, 0.37, 0.18, 0.25],
+        vertical_spacing=0.055,
+        horizontal_spacing=0.08,
     )
     figure.add_trace(
         go.Scatter(
@@ -3493,6 +3720,104 @@ def _block18_kappa_profile_figure(window):
     )
     figure.add_trace(
         go.Scatter(
+            x=[orders[0], orders[-1]],
+            y=[current_downside_level, current_downside_level],
+            mode="lines",
+            name=(
+                f"Downside functional level ({current_downside_level:.4f}; "
+                f"Z {current_downside_level_zscore:+.2f})"
+            ),
+            line={"color": "#fdba74", "width": 2, "dash": "dot"},
+            hovertemplate=(
+                f"Downside functional level: {current_downside_level:.4f}<br>"
+                f"Historical Z-score: {current_downside_level_zscore:+.2f}"
+                "<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[orders[0], orders[-1]],
+            y=[current_total_lp_level, current_total_lp_level],
+            mode="lines",
+            name=(
+                f"Total-risk functional level ({current_total_lp_level:.4f}; "
+                f"Z {current_total_lp_level_zscore:+.2f})"
+            ),
+            line={"color": "#67e8f9", "width": 2, "dash": "dot"},
+            hovertemplate=(
+                f"Total-risk functional level: {current_total_lp_level:.4f}<br>"
+                f"Historical Z-score: {current_total_lp_level_zscore:+.2f}"
+                "<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Surface(
+            x=orders,
+            y=surface_dates,
+            z=downside_kappa_surface,
+            name="Downside Kappa surface",
+            colorscale="YlOrRd",
+            colorbar={
+                "title": "Kappa",
+                "len": 0.33,
+                "thickness": 12,
+                "x": 1.0,
+                "y": 0.50,
+            },
+            customdata=np.stack(
+                [downside_scale_surface, surface_mean_excess_grid], axis=-1
+            ),
+            hovertemplate=(
+                "Date: %{y|%Y-%m-%d}<br>"
+                "Kappa-%{x:.1f}: %{z:.4f}<br>"
+                "Downside scale: %{customdata[0]:.6f}<br>"
+                "Mean excess return: %{customdata[1]:.6f}<extra></extra>"
+            ),
+            contours={"z": {"show": True, "usecolormap": True, "project_z": True}},
+            showscale=True,
+            visible=True,
+        ),
+        row=2,
+        col=1,
+    )
+    figure.add_trace(
+        go.Surface(
+            x=orders,
+            y=surface_dates,
+            z=total_lp_ratio_surface,
+            name="Total-risk Lp surface",
+            colorscale="Blues",
+            colorbar={
+                "title": "Lp ratio",
+                "len": 0.33,
+                "thickness": 12,
+                "x": 1.0,
+                "y": 0.50,
+            },
+            customdata=np.stack(
+                [total_lp_scale_surface, surface_mean_excess_grid], axis=-1
+            ),
+            hovertemplate=(
+                "Date: %{y|%Y-%m-%d}<br>"
+                "Total L%{x:.1f} ratio: %{z:.4f}<br>"
+                "Mean-centered Lp scale: %{customdata[0]:.6f}<br>"
+                "Mean excess return: %{customdata[1]:.6f}<extra></extra>"
+            ),
+            contours={"z": {"show": True, "usecolormap": True, "project_z": True}},
+            showscale=True,
+            visible=False,
+        ),
+        row=2,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
             x=kappa_frame["Order"],
             y=kappa_frame["Total Lp ratio"],
             mode="lines+markers",
@@ -3513,16 +3838,112 @@ def _block18_kappa_profile_figure(window):
         col=1,
     )
     for conventional_order, label in ((1.0, "Kappa-1"), (2.0, "Kappa-2 / Sortino"), (3.0, "Kappa-3"), (4.0, "Kappa-4")):
-        figure.add_vline(
-            x=conventional_order,
-            line_dash="dot",
-            line_color="#64748b",
-            annotation_text=label,
-            annotation_position="top",
-            row=1,
-            col=1,
+        figure.add_shape(
+            type="line",
+            x0=conventional_order,
+            x1=conventional_order,
+            y0=0,
+            y1=1,
+            xref="x",
+            yref="y domain",
+            line={"dash": "dot", "color": "#64748b"},
         )
-    figure.add_hline(y=0.0, line_dash="dash", line_color="#94a3b8", row=1, col=1)
+        figure.add_annotation(
+            x=conventional_order,
+            y=1,
+            xref="x",
+            yref="y domain",
+            text=label,
+            showarrow=False,
+            yshift=10,
+            font={"color": "#94a3b8", "size": 10},
+        )
+    figure.add_shape(
+        type="line",
+        x0=0,
+        x1=1,
+        y0=0.0,
+        y1=0.0,
+        xref="x domain",
+        yref="y",
+        line={"dash": "dash", "color": "#94a3b8"},
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=surface_dates,
+            y=downside_level_zscore_history,
+            mode="lines",
+            name="Downside Kappa level Z-score",
+            line={"color": "#f97316", "width": 2.2},
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Downside level Z-score: %{y:.3f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=surface_dates,
+            y=total_lp_level_zscore_history,
+            mode="lines",
+            name="Total-risk Lp level Z-score",
+            line={"color": "#22d3ee", "width": 2.2},
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Total-risk level Z-score: %{y:.3f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=surface_dates,
+            y=downside_slope_zscore_history,
+            mode="lines",
+            name="Downside Kappa slope Z-score",
+            line={"color": "#f97316", "width": 2.2},
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Downside slope Z-score: %{y:.3f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=3,
+        col=2,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=surface_dates,
+            y=total_lp_slope_zscore_history,
+            mode="lines",
+            name="Total-risk Lp slope Z-score",
+            line={"color": "#22d3ee", "width": 2.2},
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Total-risk slope Z-score: %{y:.3f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=3,
+        col=2,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[surface_dates[0], surface_dates[-1]],
+            y=[0.0, 0.0],
+            mode="lines",
+            line={"color": "#64748b", "width": 1.2, "dash": "dash"},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=3,
+        col=2,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[surface_dates[0], surface_dates[-1]],
+            y=[0.0, 0.0],
+            mode="lines",
+            line={"color": "#64748b", "width": 1.2, "dash": "dash"},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=3,
+        col=1,
+    )
     figure.add_trace(
         go.Table(
             header={
@@ -3548,13 +3969,17 @@ def _block18_kappa_profile_figure(window):
                 "height": 24,
             },
         ),
-        row=2,
+        row=4,
         col=1,
     )
     latest_mar = float(sample["mar"].iloc[-1])
     annualized_latest_mar = (1.0 + latest_mar) ** annualization_factor - 1.0
     figure.update_xaxes(title_text="Lp order (p = n)", dtick=0.1, row=1, col=1)
     figure.update_yaxes(title_text="Reward-to-risk ratio", row=1, col=1)
+    figure.update_xaxes(title_text="Window end date", row=3, col=1)
+    figure.update_xaxes(title_text="Window end date", row=3, col=2)
+    figure.update_yaxes(title_text="Level Z-score", row=3, col=1)
+    figure.update_yaxes(title_text="Slope Z-score", row=3, col=2)
     figure.update_layout(
         title=(
             f"{ticker_str} Downside Kappa vs Total-Risk Lp Profile — {window}-Day Window<br>"
@@ -3563,11 +3988,50 @@ def _block18_kappa_profile_figure(window):
             "ratios are non-annualized</sup>"
         ),
         template="plotly_dark",
-        height=1450,
+        height=2400,
         hovermode="x unified",
         showlegend=True,
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1.0},
         margin={"t": 105, "r": 35, "b": 35, "l": 75},
+        updatemenus=[{
+            "type": "dropdown",
+            "direction": "down",
+            "active": 0,
+            "x": 0.01,
+            "y": 0.70,
+            "xanchor": "left",
+            "yanchor": "bottom",
+            "bgcolor": "#111827",
+            "bordercolor": "#475569",
+            "font": {"color": "#e2e8f0", "size": 12},
+            "buttons": [
+                {
+                    "label": "Downside Kappa",
+                    "method": "update",
+                    "args": [
+                        {"visible": [True, False]},
+                        {"scene.zaxis.title.text": "Downside Kappa"},
+                        [3, 4],
+                    ],
+                },
+                {
+                    "label": "Total-Risk Lp Profile",
+                    "method": "update",
+                    "args": [
+                        {"visible": [False, True]},
+                        {"scene.zaxis.title.text": "Total Lp ratio"},
+                        [3, 4],
+                    ],
+                },
+            ],
+        }],
+        scene={
+            "xaxis_title": "Lp order (p)",
+            "yaxis_title": "Window end date",
+            "zaxis_title": "Downside Kappa",
+            "aspectmode": "cube",
+            "camera": {"eye": {"x": 1.45, "y": -1.55, "z": 0.85}},
+        },
     )
     return figure
 
@@ -3614,6 +4078,8 @@ def _block18_pezier_white_figure(window):
         },
         axis=1,
     ).replace([np.inf, -np.inf], np.nan)
+    profile["Net adjustment"] = profile["Pézier–White"] - profile["Sharpe"]
+    profile["Adjustment z-score"] = calculate_zscore(profile["Net adjustment"])
     latest = profile.dropna().tail(1)
     if latest.empty:
         raise ValueError(
@@ -3626,40 +4092,80 @@ def _block18_pezier_white_figure(window):
         rows=3,
         cols=1,
         shared_xaxes=True,
-        specs=[[{"type": "xy"}], [{"type": "xy"}], [{"type": "table"}]],
-        row_heights=[0.46, 0.27, 0.27],
+        specs=[
+            [{"type": "xy", "secondary_y": True}],
+            [{"type": "xy"}],
+            [{"type": "table"}],
+        ],
+        row_heights=[0.38, 0.32, 0.30],
         vertical_spacing=0.055,
         subplot_titles=[
-            "Rolling Sharpe comparison — baseline, skew-adjusted, and full Pézier–White",
-            "Higher-moment contribution to annualized Sharpe",
+            "Net higher-moment adjustment — Pézier–White minus Sharpe",
+            "Adjustment decomposition — skewness and excess kurtosis",
             f"Latest {window}-day assessment ({latest_date:%Y-%m-%d})",
         ],
     )
-    performance_styles = {
-        "Sharpe": ("#94a3b8", "dot"),
-        "Skew-adjusted": ("#f59e0b", "dash"),
-        "Pézier–White": ("#10b981", "solid"),
-    }
-    for column, (color, dash) in performance_styles.items():
+    positive_adjustment = profile["Net adjustment"].where(
+        profile["Net adjustment"] >= 0.0
+    )
+    negative_adjustment = profile["Net adjustment"].where(
+        profile["Net adjustment"] <= 0.0
+    )
+    for adjustment, fill_color in (
+        (positive_adjustment, "rgba(16, 185, 129, 0.34)"),
+        (negative_adjustment, "rgba(244, 63, 94, 0.34)"),
+    ):
         figure.add_trace(
             go.Scatter(
                 x=profile.index,
-                y=profile[column],
-                name=column,
+                y=adjustment,
                 mode="lines",
-                line={"color": color, "width": 2.4, "dash": dash},
-                customdata=np.column_stack([
-                    profile["Skewness"], profile["Excess kurtosis"]
-                ]),
-                hovertemplate=(
-                    f"{column}: %{{y:.3f}}<br>"
-                    "Skewness: %{customdata[0]:.3f}<br>"
-                    "Excess kurtosis: %{customdata[1]:.3f}<extra></extra>"
-                ),
+                line={"width": 0},
+                fill="tozeroy",
+                fillcolor=fill_color,
+                hoverinfo="skip",
+                showlegend=False,
             ),
             row=1,
             col=1,
+            secondary_y=False,
         )
+    figure.add_trace(
+        go.Scatter(
+            x=profile.index,
+            y=profile["Net adjustment"],
+            name="Net adjustment",
+            mode="lines",
+            line={"color": "#f8fafc", "width": 1.8},
+            customdata=np.column_stack([
+                profile["Sharpe"],
+                profile["Pézier–White"],
+                profile["Adjustment z-score"],
+            ]),
+            hovertemplate=(
+                "Net adjustment: %{y:+.5f}<br>"
+                "Sharpe: %{customdata[0]:.3f}<br>"
+                "Pézier–White: %{customdata[1]:.3f}<br>"
+                "Adjustment z-score: %{customdata[2]:+.2f}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=profile.index,
+            y=profile["Adjustment z-score"],
+            name="Adjustment z-score",
+            mode="lines",
+            line={"color": "#facc15", "width": 1.4, "dash": "dash"},
+            hovertemplate="Adjustment z-score: %{y:+.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
     contribution_styles = {
         "Skew contribution": "#38bdf8",
         "Kurtosis contribution": "#f97316",
@@ -3673,14 +4179,27 @@ def _block18_pezier_white_figure(window):
                 mode="lines",
                 line={"color": color, "width": 2},
                 fill="tozeroy",
-                opacity=0.78,
-                hovertemplate=f"{column}: %{{y:+.3f}}<extra></extra>",
+                opacity=0.58,
+                hovertemplate=f"{column}: %{{y:+.5f}}<extra></extra>",
             ),
             row=2,
             col=1,
         )
+    figure.add_trace(
+        go.Scatter(
+            x=profile.index,
+            y=profile["Net adjustment"],
+            name="Net of contributions",
+            mode="lines",
+            line={"color": "#f8fafc", "width": 2.2},
+            hovertemplate="Net adjustment: %{y:+.5f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
 
-    net_adjustment = float(latest_values["Pézier–White"] - latest_values["Sharpe"])
+    net_adjustment = float(latest_values["Net adjustment"])
+    adjustment_zscore = float(latest_values["Adjustment z-score"])
     assessment = (
         "Higher moments improve the Sharpe assessment"
         if net_adjustment > 0
@@ -3707,24 +4226,30 @@ def _block18_pezier_white_figure(window):
             cells={
                 "values": [
                     [
-                        "Annualized Sharpe", "Skew-adjusted Sharpe", "Pézier–White adjusted Sharpe",
-                        "Skewness", "Excess kurtosis", "Net higher-moment adjustment",
+                        "Annualized Sharpe", "Pézier–White adjusted Sharpe",
+                        "Net higher-moment adjustment", "Adjustment z-score",
+                        "Skew contribution", "Kurtosis contribution",
+                        "Skewness", "Excess kurtosis",
                     ],
                     [
                         f"{latest_values['Sharpe']:.3f}",
-                        f"{latest_values['Skew-adjusted']:.3f}",
                         f"{latest_values['Pézier–White']:.3f}",
+                        f"{net_adjustment:+.5f}",
+                        f"{adjustment_zscore:+.2f}",
+                        f"{latest_values['Skew contribution']:+.5f}",
+                        f"{latest_values['Kurtosis contribution']:+.5f}",
                         f"{latest_values['Skewness']:.3f}",
                         f"{latest_values['Excess kurtosis']:.3f}",
-                        f"{net_adjustment:+.3f}",
                     ],
                     [
                         "Mean/volatility baseline",
-                        "Baseline plus the third-moment effect",
                         "Baseline plus skewness and fourth-moment effects",
+                        assessment,
+                        "Current adjustment relative to its full historical distribution",
+                        "Third-moment effect on annualized Sharpe",
+                        "Fourth-moment effect on annualized Sharpe",
                         "Positive is favorable; negative indicates left-tail asymmetry",
                         "Positive indicates heavier-than-normal tails",
-                        assessment,
                     ],
                 ],
                 "fill_color": "#0f172a",
@@ -3736,12 +4261,18 @@ def _block18_pezier_white_figure(window):
         row=3,
         col=1,
     )
-    figure.update_yaxes(title_text="Annualized ratio", row=1, col=1)
+    figure.update_yaxes(
+        title_text="Sharpe-point adjustment", row=1, col=1, secondary_y=False
+    )
+    figure.update_yaxes(
+        title_text="Historical z-score", row=1, col=1, secondary_y=True,
+        showgrid=False,
+    )
     figure.update_yaxes(title_text="Sharpe points", row=2, col=1)
     figure.update_layout(
         title=(
             f"{ticker_str} Pézier–White Higher-Moment Sharpe Analysis — {window}-Day Window<br>"
-            "<sup>Daily Sharpe is adjusted for skewness and excess kurtosis, then scaled by √252</sup>"
+            "<sup>Focus: the adjustment beyond Sharpe and whether skewness or excess kurtosis drives it</sup>"
         ),
         template="plotly_dark",
         height=1500,
@@ -3752,8 +4283,10 @@ def _block18_pezier_white_figure(window):
     return figure
 
 
-def _block18_systematic_risk_figure(window, selected_benchmarks):
-    """Plot rolling benchmark-specific beta and Treynor ratios."""
+def _block18_systematic_risk_figure(window, selected_benchmarks, ratio_type="sharpe"):
+    """Plot the selected asset metric alongside benchmark-specific beta."""
+    ratio_type = _block18_normalize_ratio_type(ratio_type)
+    ratio_label = _block18_ratio_label(ratio_type)
     window = _block18_validate_window(window)
     selected_benchmarks = _block18_normalize_benchmark_selection(
         selected_benchmarks
@@ -3765,12 +4298,11 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
         asset_history["Close"], errors="coerce"
     ).dropna().sort_index()
     asset_returns = asset_close_series.pct_change(fill_method=None)
-    treynor_by_benchmark = {}
-    treynor_zscore_by_benchmark = {}
+    metric_values = rolling_ratio_series(asset_close_series, window, ratio_type)
+    metric_zscore = zscore_or_empty(metric_values)
     beta_by_benchmark = {}
     annual_excess_by_benchmark = {}
     latest_rows = []
-    minimum_beta_magnitude = 0.05
 
     for symbol in selected_benchmarks:
         benchmark_frame = benchmark_data.get(symbol)
@@ -3812,20 +4344,13 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
             .mean()
             * annualization_factor
         )
-        stable_beta = beta.where(beta.abs() >= minimum_beta_magnitude)
-        treynor = annual_excess.div(stable_beta).replace(
-            [np.inf, -np.inf], np.nan
-        )
-        treynor_zscore = zscore_or_empty(treynor)
         beta_by_benchmark[symbol] = beta
         annual_excess_by_benchmark[symbol] = annual_excess
-        treynor_by_benchmark[symbol] = treynor
-        treynor_zscore_by_benchmark[symbol] = treynor_zscore
 
         latest = pd.concat(
             {
-                "Treynor": treynor,
-                "Treynor z-score": treynor_zscore,
+                "Metric": metric_values,
+                "Metric z-score": metric_zscore,
                 "Beta": beta,
                 "Annual excess": annual_excess,
             },
@@ -3834,7 +4359,7 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
         if not latest.empty:
             latest_rows.append((symbol, latest.index[-1], latest.iloc[-1]))
 
-    if not treynor_by_benchmark:
+    if not beta_by_benchmark:
         raise ValueError(
             f"No selected benchmark has enough aligned history for a {window}-day window."
         )
@@ -3847,37 +4372,30 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
         row_heights=[0.50, 0.27, 0.23],
         vertical_spacing=0.075,
         subplot_titles=[
-            "Historical Treynor ratio z-scores by benchmark beta",
+            f"{ticker_str} Historical {ratio_label} Z-Score",
             "Rolling systematic beta by benchmark",
             "Latest systematic-risk assessment",
         ],
     )
     colors = block18_benchmark_profile_palette
-    for position, symbol in enumerate(treynor_by_benchmark):
+    for position, symbol in enumerate(beta_by_benchmark):
         color = colors[position % len(colors)]
-        treynor = treynor_by_benchmark[symbol]
-        treynor_zscore = treynor_zscore_by_benchmark[symbol]
         beta = beta_by_benchmark[symbol]
-        figure.add_trace(
-            go.Scatter(
-                x=treynor_zscore.index,
-                y=treynor_zscore,
-                name=f"Treynor Z-Score vs {symbol}",
-                mode="lines",
-                line={"color": color, "width": 2.4},
-                customdata=np.column_stack([
-                    treynor.reindex(treynor_zscore.index),
-                    beta.reindex(treynor_zscore.index),
-                ]),
-                hovertemplate=(
-                    f"Treynor z-score vs {symbol}: %{{y:.3f}}<br>"
-                    "Raw Treynor: %{customdata[0]:.3f}<br>"
-                    "Rolling beta: %{customdata[1]:.3f}<extra></extra>"
-                ),
-            ),
-            row=1,
-            col=1,
-        )
+        if position == 0:
+            # The selected metric belongs to the asset. Benchmark-relative
+            # selections carry their own reference symbol in ratio_type.
+            figure.add_trace(
+                go.Scatter(
+                    x=metric_zscore.index, y=metric_zscore,
+                    name=f"{ticker_str} {ratio_label} Z-Score", mode="lines",
+                    line={"color": color, "width": 2.4},
+                    customdata=np.column_stack([metric_values.reindex(metric_zscore.index)]),
+                    hovertemplate=(
+                        f"{ratio_label} z-score: %{{y:.3f}}<br>"
+                        f"Raw {ratio_label}: %{{customdata[0]:.3f}}<extra></extra>"
+                    ),
+                ), row=1, col=1,
+            )
         figure.add_trace(
             go.Scatter(
                 x=beta.index,
@@ -3887,7 +4405,7 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
                 line={"color": color, "width": 2},
                 hovertemplate=f"Beta vs {symbol}: %{{y:.3f}}<extra></extra>",
                 legendgroup=symbol,
-                showlegend=False,
+                showlegend=True,
             ),
             row=2,
             col=1,
@@ -3916,7 +4434,7 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
         row=1,
         col=1,
     )
-    for sigma_level in (-2.0, -1.0, 1.0, 2.0):
+    for sigma_level in (-2.0, -1.0, -0.5, 0.5, 1.0, 2.0):
         figure.add_hline(
             y=sigma_level,
             line_dash="dash",
@@ -3925,9 +4443,9 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
             col=1,
         )
     for label, y_position, color in (
-        ("Accumulate", -1.5, "rgba(235, 255, 235, 0.95)"),
-        ("Neutral", 0.0, "rgba(235, 235, 235, 0.95)"),
-        ("Liquidate", 1.5, "rgba(255, 235, 235, 0.95)"),
+        ("Low", -1.5, "rgba(235, 255, 235, 0.95)"),
+        ("Typical", 0.0, "rgba(235, 235, 235, 0.95)"),
+        ("High", 1.5, "rgba(255, 235, 235, 0.95)"),
     ):
         figure.add_annotation(
             x=0.5,
@@ -3949,8 +4467,8 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
             [pd.Timestamp(row[1]).strftime("%Y-%m-%d") for row in latest_rows],
             [f"{row[2]['Beta']:.3f}" for row in latest_rows],
             [f"{row[2]['Annual excess']:.2%}" for row in latest_rows],
-            [f"{row[2]['Treynor']:.3f}" for row in latest_rows],
-            [f"{row[2]['Treynor z-score']:.3f}" for row in latest_rows],
+            [f"{row[2]['Metric']:.3f}" for row in latest_rows],
+            [f"{row[2]['Metric z-score']:.3f}" for row in latest_rows],
         ]
     else:
         table_values = [
@@ -3961,7 +4479,7 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
             header={
                 "values": [
                     "Benchmark", "As of", "Rolling beta",
-                    "Annualized excess return", "Raw Treynor", "Treynor z-score",
+                    "Annualized excess return", f"Raw {ratio_label}", f"{ratio_label} z-score",
                 ],
                 "fill_color": "#1e293b",
                 "font": {"color": "#f8fafc", "size": 12},
@@ -3978,14 +4496,12 @@ def _block18_systematic_risk_figure(window, selected_benchmarks):
         row=3,
         col=1,
     )
-    figure.update_yaxes(title_text="Treynor z-score", row=1, col=1)
+    figure.update_yaxes(title_text=f"{ratio_label} z-score", row=1, col=1)
     figure.update_yaxes(title_text="Beta", row=2, col=1)
     figure.update_layout(
         title=(
-            f"{ticker_str} Systematic Risk — {window}-Day Rolling Window<br>"
-            f"<sup>Z-scores standardize each benchmark's historical Treynor series; "
-            f"raw Treynor = annualized mean excess return ÷ benchmark beta; "
-            f"ratios suppressed when |beta| &lt; {minimum_beta_magnitude:.2f}</sup>"
+            f"{ticker_str} Systematic Risk ? {ratio_label} ? {window}-Day Rolling Window<br>"
+            f"<sup>Asset {ratio_label} z-score with rolling beta against each selected benchmark</sup>"
         ),
         template="plotly_dark",
         height=1550,
@@ -4045,6 +4561,7 @@ def _block18_cornish_fisher_figure(window):
             "normal_var": normal_var,
             "modified_var": modified_var,
             "modified_sharpe": modified_sharpe,
+            "sharpe_spread": modified_sharpe - regular_sharpe,
         }
 
     complete = pd.concat(
@@ -4065,19 +4582,21 @@ def _block18_cornish_fisher_figure(window):
     latest_date = pd.Timestamp(complete.index[-1])
 
     figure = make_subplots(
-        rows=4,
+        rows=5,
         cols=1,
         shared_xaxes=True,
         specs=[
             [{"type": "xy"}],
             [{"type": "xy"}],
+            [{"type": "xy"}],
             [{"type": "xy", "secondary_y": True}],
             [{"type": "table"}],
         ],
-        row_heights=[0.32, 0.29, 0.19, 0.20],
-        vertical_spacing=0.055,
+        row_heights=[0.25, 0.20, 0.23, 0.15, 0.17],
+        vertical_spacing=0.045,
         subplot_titles=[
             "Rolling Cornish–Fisher modified Sharpe",
+            "Modified Sharpe spread versus regular Sharpe",
             "Normal VaR versus Cornish–Fisher modified VaR",
             "Higher-moment inputs driving the tail adjustment",
             f"Latest tail-risk assessment ({latest_date:%Y-%m-%d})",
@@ -4119,6 +4638,27 @@ def _block18_cornish_fisher_figure(window):
         )
         figure.add_trace(
             go.Scatter(
+                x=payload["sharpe_spread"].index,
+                y=payload["sharpe_spread"],
+                name=f"{confidence_label} Modified − Regular Sharpe",
+                mode="lines",
+                line={"color": color, "width": 2.2},
+                fill="tozeroy",
+                fillcolor=(
+                    "rgba(34, 211, 238, 0.16)"
+                    if confidence == 0.95
+                    else "rgba(249, 115, 22, 0.16)"
+                ),
+                hovertemplate=(
+                    f"{confidence_label} Sharpe spread: %{{y:+.4f}}<br>"
+                    "Positive = modified Sharpe above regular Sharpe<extra></extra>"
+                ),
+            ),
+            row=2,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
                 x=payload["normal_var"].index,
                 y=payload["normal_var"] * 100.0,
                 name=f"{confidence_label} Normal VaR",
@@ -4126,7 +4666,7 @@ def _block18_cornish_fisher_figure(window):
                 line={"color": color, "width": 1.6, "dash": "dot"},
                 hovertemplate=f"{confidence_label} normal VaR: %{{y:.3f}}%<extra></extra>",
             ),
-            row=2,
+            row=3,
             col=1,
         )
         figure.add_trace(
@@ -4138,7 +4678,7 @@ def _block18_cornish_fisher_figure(window):
                 line={"color": color, "width": 2.5},
                 hovertemplate=f"{confidence_label} modified VaR: %{{y:.3f}}%<extra></extra>",
             ),
-            row=2,
+            row=3,
             col=1,
         )
 
@@ -4151,7 +4691,7 @@ def _block18_cornish_fisher_figure(window):
             line={"color": "#a78bfa", "width": 2},
             hovertemplate="Skewness: %{y:.3f}<extra></extra>",
         ),
-        row=3,
+        row=4,
         col=1,
         secondary_y=False,
     )
@@ -4164,14 +4704,15 @@ def _block18_cornish_fisher_figure(window):
             line={"color": "#facc15", "width": 2},
             hovertemplate="Excess kurtosis: %{y:.3f}<extra></extra>",
         ),
-        row=3,
+        row=4,
         col=1,
         secondary_y=True,
     )
 
     # Add shapes before the domain-based table for older Plotly compatibility.
     figure.add_hline(y=0.0, line_dash="dot", line_color="#64748b", row=1, col=1)
-    figure.add_hline(y=0.0, line_dash="dot", line_color="#64748b", row=3, col=1)
+    figure.add_hline(y=0.0, line_dash="dot", line_color="#64748b", row=2, col=1)
+    figure.add_hline(y=0.0, line_dash="dot", line_color="#64748b", row=4, col=1)
 
     table_rows = []
     latest_modified_vars = {}
@@ -4243,20 +4784,21 @@ def _block18_cornish_fisher_figure(window):
                 "height": 32,
             },
         ),
-        row=4,
+        row=5,
         col=1,
     )
     figure.update_yaxes(title_text="Excess return / modified VaR", row=1, col=1)
-    figure.update_yaxes(title_text="One-day loss threshold (%)", row=2, col=1)
-    figure.update_yaxes(title_text="Skewness", row=3, col=1, secondary_y=False)
-    figure.update_yaxes(title_text="Excess kurtosis", row=3, col=1, secondary_y=True)
+    figure.update_yaxes(title_text="Modified − regular", row=2, col=1)
+    figure.update_yaxes(title_text="One-day loss threshold (%)", row=3, col=1)
+    figure.update_yaxes(title_text="Skewness", row=4, col=1, secondary_y=False)
+    figure.update_yaxes(title_text="Excess kurtosis", row=4, col=1, secondary_y=True)
     figure.update_layout(
         title=(
             f"{ticker_str} Cornish–Fisher Tail-Risk Analysis — {window}-Day Window<br>"
             "<sup>Modified VaR adjusts the normal one-day loss quantile for rolling skewness and excess kurtosis</sup>"
         ),
         template="plotly_dark",
-        height=1900,
+        height=2250,
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1.0},
         margin={"t": 120, "r": 90, "b": 35, "l": 90},
@@ -5141,6 +5683,68 @@ def _block18_first_passage_analytics_figure(
     return _block18_apply_typography(figure)
 
 
+def _block18_price_correlation_figure(window, display_range_value, selected_benchmarks):
+    """Append benchmark correlation below the price and drawdown panels."""
+    figure = plot_candlestick_drawdown_recovery_view(
+        price_frame=asset_history,
+        drawdown_recovery_by_window=_block18_drawdown_recovery_for_window(window),
+        ticker_label=ticker_str,
+        candlestick_period=period,
+        default_window=window,
+        show_window_menu=False,
+        default_timeframe_label=_block18_display_range_label(display_range_value),
+    )
+    term_label = f"{window}-day"
+    correlation = plot_rolling_correlation_view(
+        rolling_correlation_map=_block18_rolling_correlation_for_window(window, selected_benchmarks),
+        time_frame_map={term_label: window},
+        term_order=[term_label],
+        benchmark_order=selected_benchmarks,
+        ticker_label=ticker_str,
+    )
+    # Preserve the existing panel proportions above a dedicated correlation axis.
+    for axis_name in ("yaxis", "yaxis2", "yaxis3"):
+        axis = figure.layout[axis_name]
+        axis.domain = [0.28 + 0.72 * value for value in axis.domain]
+    for collection in (figure.layout.annotations, figure.layout.shapes):
+        for item in collection:
+            if item.yref == "paper":
+                for key in ("y", "y0", "y1"):
+                    if key in item and item[key] is not None:
+                        item[key] = 0.28 + 0.72 * item[key]
+    figure.update_layout(
+        xaxis4=dict(anchor="y4", matches="x", type="date", domain=[0, 1],
+                    rangeslider=dict(visible=False)),
+        yaxis4=dict(anchor="x4", domain=[0, 0.22], title="Correlation", range=[-1.05, 1.05]),
+        height=2100,
+        showlegend=True,
+        legend=dict(orientation="h", x=0, y=-0.04),
+    )
+    # Existing price traces stay out of the benchmark legend.
+    for trace in figure.data:
+        trace.showlegend = False
+    for original in correlation.data:
+        trace = copy.deepcopy(original)
+        trace.update(xaxis="x4", yaxis="y4")
+        figure.add_trace(trace)
+    for field in ("annotations", "shapes"):
+        for original in getattr(correlation.layout, field) or ():
+            item = original.to_plotly_json()
+            for key, old, new in (("xref", "x", "x4"), ("yref", "y", "y4")):
+                ref = item.get(key, "paper" if field == "annotations" else old)
+                if ref in (old, old + " domain"):
+                    item[key] = ref.replace(old, new, 1)
+            if item.get("yref") == "paper":
+                for key in ("y", "y0", "y1"):
+                    if key in item:
+                        item[key] *= 0.22
+            if field == "annotations":
+                figure.add_annotation(item)
+            else:
+                figure.add_shape(item)
+    return figure
+
+
 def _block18_build_tab_figure(
     active_tab, window, display_range_value, selected_benchmarks,
     ratio_type="sharpe", autocorrelation_lag_range=None,
@@ -5157,12 +5761,14 @@ def _block18_build_tab_figure(
     ratio_type = _block18_normalize_ratio_type(ratio_type)
     if active_tab == "volatility_efficiency":
         return _block18_volatility_efficiency_distribution_figure(window)
+    if active_tab == "garch":
+        return _block18_garch_volatility_figure(window)
     if active_tab == "risk":
         return build_block18_decomposition_figure(
             window, selected_benchmarks, ratio_type
         )
     if active_tab == "systematic_risk":
-        return _block18_systematic_risk_figure(window, selected_benchmarks)
+        return _block18_systematic_risk_figure(window, selected_benchmarks, ratio_type)
     if active_tab == "kappa":
         return _block18_kappa_profile_figure(window)
     if active_tab == "pezier_white":
@@ -5192,26 +5798,7 @@ def _block18_build_tab_figure(
             default_label=term_label,
         )
     if active_tab == "drawdown":
-        return plot_candlestick_drawdown_recovery_view(
-            price_frame=asset_history,
-            drawdown_recovery_by_window=_block18_drawdown_recovery_for_window(window),
-            ticker_label=ticker_str,
-            candlestick_period=period,
-            default_window=window,
-            show_window_menu=False,
-            default_timeframe_label=_block18_display_range_label(display_range_value),
-        )
-    if active_tab == "correlation":
-        term_label = f"{window}-day"
-        return plot_rolling_correlation_view(
-            rolling_correlation_map=_block18_rolling_correlation_for_window(window, selected_benchmarks),
-            time_frame_map={term_label: window},
-            term_order=[term_label],
-            benchmark_order=selected_benchmarks,
-            ticker_label=ticker_str,
-        )
-    if active_tab == "seasonality":
-        return _block18_seasonality_figure(ratio_type)
+        return _block18_price_correlation_figure(window, display_range_value, selected_benchmarks)
     if active_tab == "heatmap":
         return plot_sharpe_zscore_heatmap_view(
             asset_sharpe_zscore_frame=asset_sharpe_zscore_frame,
@@ -5232,39 +5819,24 @@ def _block18_build_tab_figure(
             selected_benchmarks, ratio_type
         )
     if active_tab == "window_diagnostics":
-        _block18_prepare_window_diagnostics_playback(ratio_type)
+        _block18_prepare_window_diagnostics_playback(ratio_type, selected_benchmarks)
         return _block18_filter_benchmark_traces(
-            _block18_ratio_diagnostics_source_figure(ratio_type),
+            _block18_ratio_diagnostics_source_figure(ratio_type, selected_benchmarks),
             selected_benchmarks,
         )
     return _block18_error_figure("Select a valid Momentum & Efficiency view.", height=850)
 
 def _block18_expected_factor_benchmarks():
-    if not globals().get("include_factor_peer_index", False):
-        return {}
-    lookup_symbol = globals().get("factor_peer_index_source_ticker") or ticker_str
-    safe_symbol = str(lookup_symbol).replace(".", "_").replace("/", "_")
-    expected = {}
-    for gics_level, file_suffix in factor_gics_index_suffixes.items():
-        cache_path = Path(peer_index_cache_dir) / f"{safe_symbol}_{file_suffix}_index.csv"
-        if not cache_path.exists():
-            continue
-        cached_header = pd.read_csv(cache_path, nrows=1)
-        label = factor_index_display_label(
-            cached_header, f"{lookup_symbol} {gics_level} Index"
+    # Only expect the validated baskets selected during this launch. Old files
+    # on disk may belong to an earlier classification or calculation setting.
+    return {
+        meta["label"]: Path(peer_index_cache_dir) / (
+            f"{factor_peer_lookup_symbol}_{factor_gics_index_suffixes[level]}_index.csv"
         )
-        expected[label] = cache_path
-    if expected:
-        return expected
+        for level, (frame, meta) in factor_peer_refresh_results.items()
+        if not frame.empty and meta.get("label") in benchmark_data
+    }
 
-    legacy_path = Path(peer_index_cache_dir) / f"{safe_symbol}_peer_index.csv"
-    if legacy_path.exists():
-        cached_header = pd.read_csv(legacy_path, nrows=1)
-        label = factor_index_display_label(
-            cached_header, f"{lookup_symbol} Peer Index"
-        )
-        expected[label] = legacy_path
-    return expected
 
 def _block18_validate_peer_state(active_tab, figure=None, required_benchmarks=None):
     expected_benchmarks = _block18_expected_factor_benchmarks()
@@ -6328,12 +6900,14 @@ def _block18_configure_spline_traces(
 block18_ratio_diagnostics_figure_cache = {}
 
 
-def _block18_ratio_diagnostics_source_figure(ratio_type):
+def _block18_ratio_diagnostics_source_figure(ratio_type, selected_benchmarks=None):
     """Build the full five-row diagnostics source for one selected ratio."""
     ratio_type = _block18_normalize_ratio_type(ratio_type)
-    _ensure_momentum_diagnostics_ratio(ratio_type)
-    if ratio_type in block18_ratio_diagnostics_figure_cache:
-        return go.Figure(block18_ratio_diagnostics_figure_cache[ratio_type])
+    _ensure_momentum_diagnostics_ratio(ratio_type, selected_benchmarks)
+    owners = tuple(dict.fromkeys([ticker_str, *(selected_benchmarks or [])]))
+    cache_key = (ratio_type, owners)
+    if cache_key in block18_ratio_diagnostics_figure_cache:
+        return go.Figure(block18_ratio_diagnostics_figure_cache[cache_key])
 
     ratio_label = _block18_ratio_label(ratio_type)
     diagnostics_contexts = momentum_diagnostics_contexts_by_ratio.get(
@@ -6342,6 +6916,7 @@ def _block18_ratio_diagnostics_source_figure(ratio_type):
     display_contexts = momentum_diagnostics_display_contexts_by_ratio.get(
         ratio_type, {}
     )
+    display_contexts = {symbol: display_contexts[symbol] for symbol in owners if symbol in display_contexts}
     asset_context = diagnostics_contexts.get(ticker_str)
     asset_display_context = display_contexts.get(ticker_str)
     if asset_context is None or asset_display_context is None:
@@ -6414,7 +6989,7 @@ def _block18_ratio_diagnostics_source_figure(ratio_type):
         range=block11_axis_range(row3_range_series), row=3, col=1
     )
     block11_add_option_dte_vlines(figure, block11_option_chain_dtes)
-    block18_ratio_diagnostics_figure_cache[ratio_type] = go.Figure(figure)
+    store_bounded(block18_ratio_diagnostics_figure_cache, cache_key, go.Figure(figure), limit=16)
     return go.Figure(figure)
 
 
@@ -6566,15 +7141,20 @@ def _block18_add_functional_segment_levels(figure, horizon_range):
     return figure
 
 
-def _block18_prepare_window_diagnostics_playback(ratio_type="sharpe"):
+def _block18_prepare_window_diagnostics_playback(ratio_type="sharpe", selected_benchmarks=None):
     ratio_type = _block18_normalize_ratio_type(ratio_type)
-    _ensure_momentum_diagnostics_ratio(ratio_type)
-    if ratio_type in block18_window_diagnostics_playback_cache:
-        return block18_window_diagnostics_playback_cache[ratio_type]
+    _ensure_momentum_diagnostics_ratio(ratio_type, selected_benchmarks)
+    owners = tuple(dict.fromkeys([ticker_str, *(selected_benchmarks or [])]))
+    cache_key = (ratio_type, _zscore_baseline_key(), owners)
+    if cache_key in block18_window_diagnostics_playback_cache:
+        return block18_window_diagnostics_playback_cache[cache_key]
 
     ratio_contexts = momentum_diagnostics_contexts_by_ratio.get(ratio_type, {})
     ratio_playback_contexts = {}
-    for symbol, diagnostics_context in ratio_contexts.items():
+    for symbol in owners:
+        if symbol not in ratio_contexts:
+            continue
+        diagnostics_context = ratio_contexts[symbol]
         ratio_frame = pd.DataFrame(diagnostics_context["ratio_table"]).copy()
         ratio_frame = ratio_frame.apply(pd.to_numeric, errors="coerce").sort_index()
         ratio_frame.index = pd.to_datetime(
@@ -6585,13 +7165,9 @@ def _block18_prepare_window_diagnostics_playback(ratio_type="sharpe"):
             ~ratio_frame.index.duplicated(keep="last")
         ]
 
-        expanding_mean = ratio_frame.expanding(min_periods=2).mean()
-        expanding_std = ratio_frame.expanding(min_periods=2).std().replace(
-            0.0, np.nan
-        )
-        ratio_zscore = ratio_frame.sub(expanding_mean).div(expanding_std).astype(
-            "float32"
-        )
+        ratio_zscore = _normalize_zscore(
+            ratio_frame, block18_display_range_offsets, playback=True
+        ).astype("float32")
         playback_context = {
             "ratio_type": ratio_type,
             "ratio_label": _block18_ratio_label(ratio_type),
@@ -6599,17 +7175,16 @@ def _block18_prepare_window_diagnostics_playback(ratio_type="sharpe"):
         }
         if symbol == ticker_str:
             playback_context.update({
-                "ratio_reference_mean": ratio_zscore.expanding(
-                    min_periods=2
-                ).mean().astype("float32"),
-                "ratio_reference_std": ratio_zscore.expanding(
-                    min_periods=2
-                ).std().astype("float32"),
+                # Standard-score references are constant across dates. Store
+                # only one value per horizon instead of two history tables.
+                "ratio_reference_mean": pd.Series(0.0, index=ratio_zscore.columns),
+                "ratio_reference_std": pd.Series(1.0, index=ratio_zscore.columns),
             })
         ratio_playback_contexts[symbol] = playback_context
 
-    block18_window_diagnostics_playback_cache[ratio_type] = (
-        ratio_playback_contexts
+    store_bounded(
+        block18_window_diagnostics_playback_cache, cache_key,
+        ratio_playback_contexts, limit=12,
     )
     return ratio_playback_contexts
 
@@ -6636,10 +7211,9 @@ def _block18_historical_ratio_surface_3d(
 ):
     """Plot the selected historical risk-adjusted-ratio profile in 3D."""
     ratio_type = _block18_normalize_ratio_type(ratio_type)
-    _ensure_momentum_diagnostics_ratio(ratio_type)
     ratio_label = _block18_ratio_label(ratio_type)
     playback_contexts = _block18_prepare_window_diagnostics_playback(
-        ratio_type
+        ratio_type, selected_benchmarks
     )
     owners = [ticker_str] + [
         symbol for symbol in _block18_normalize_benchmark_selection(selected_benchmarks)
@@ -7081,7 +7655,7 @@ def _block18_historical_ratio_surface_3d(
     figure.update_layout(
         title=(
             f"{ticker_str} Historical {ratio_label} Surface v.2 — "
-            "Functional Horizon Profiles Through Time"
+            "Horizon Snapshots Through Time"
         ),
         template="plotly_dark",
         height=max(980, 790 * len(owners)),
@@ -7142,7 +7716,7 @@ def _block18_window_diagnostics_trace_updates(
     ratio_type = _block18_normalize_ratio_type(ratio_type)
     ratio_label = _block18_ratio_label(ratio_type)
     playback_contexts = _block18_prepare_window_diagnostics_playback(
-        ratio_type
+        ratio_type, selected_benchmarks
     )
     as_of_date, playback_position = _block18_playback_date(playback_position)
     asset_context = playback_contexts[ticker_str]
@@ -7150,12 +7724,8 @@ def _block18_window_diagnostics_trace_updates(
     current_ratio = _block18_diagnostics_asof_row(
         asset_context["ratio_zscore"], as_of_date
     )
-    ratio_mean = _block18_diagnostics_asof_row(
-        asset_context["ratio_reference_mean"], as_of_date
-    )
-    ratio_std = _block18_diagnostics_asof_row(
-        asset_context["ratio_reference_std"], as_of_date
-    )
+    ratio_mean = asset_context["ratio_reference_mean"].reindex(current_ratio.index)
+    ratio_std = asset_context["ratio_reference_std"].reindex(current_ratio.index)
     trace_updates = {
         f"Current {ratio_label} Z-Score": current_ratio,
         f"Historical Mean {ratio_label} Z-Score": ratio_mean,
@@ -7259,6 +7829,7 @@ def _block18_functional_playback_signature(
     except (TypeError, ValueError):
         cache_version = 0
     return (
+        _zscore_baseline_key(),
         _block18_normalize_ratio_type(ratio_type),
         tuple(_block18_normalize_benchmark_selection(selected_benchmarks)),
         tuple(_block18_normalize_diagnostics_window_range(horizon_range)),
@@ -7283,7 +7854,9 @@ def _block18_values_at_horizons(values, horizons):
 def _block18_register_functional_playback_plan(figure, signature):
     """Cache the final three-row trace topology used by lightweight playback."""
     ratio_type = _block18_normalize_ratio_type(
-        signature[0] if signature else block18_default_ratio_type
+        # Signature field 0 is the z-score baseline tuple; field 1 is the
+        # normalized metric key used to build the Horizon Snapshot.
+        signature[1] if signature else block18_default_ratio_type
     )
     ratio_label = _block18_ratio_label(ratio_type)
     trace_targets = {}
@@ -7319,6 +7892,8 @@ def _block18_register_functional_playback_plan(figure, signature):
         trace_targets.setdefault(trace_name, []).append({
             "index": trace_index,
             "horizons": list(trace_x),
+            "yaxis": getattr(trace, "yaxis", None) or "y",
+            "visible": trace.visible not in (False, "legendonly"),
         })
 
     annotation_targets = []
@@ -7332,13 +7907,11 @@ def _block18_register_functional_playback_plan(figure, signature):
     if f"Current {ratio_label} Z-Score" not in trace_targets:
         block18_functional_playback_plan_cache.pop(signature, None)
         return False
-    if len(block18_functional_playback_plan_cache) >= 16:
-        block18_functional_playback_plan_cache.clear()
-    block18_functional_playback_plan_cache[signature] = {
+    store_bounded(block18_functional_playback_plan_cache, signature, {
         "trace_targets": trace_targets,
         "segment_targets": segment_targets,
         "annotation_targets": annotation_targets,
-    }
+    }, limit=16)
     return True
 
 
@@ -7355,14 +7928,18 @@ def _block18_patch_functional_horizon_playback(
         ratio_type,
     )
     patched_figure = Patch()
+    low, high = -2.0, 2.0
     for trace_name, targets in plan["trace_targets"].items():
         values = trace_updates.get(trace_name)
         if values is None:
             continue
         for target in targets:
-            patched_figure["data"][target["index"]]["y"] = (
-                _block18_values_at_horizons(values, target["horizons"])
-            )
+            selected = _block18_values_at_horizons(values, target["horizons"])
+            patched_figure["data"][target["index"]]["y"] = selected
+            if target.get("yaxis") == "y" and target.get("visible", True):
+                for value in selected:
+                    if value is not None and np.isfinite(value):
+                        low, high = min(low, float(value)), max(high, float(value))
 
     lower, upper = _block18_normalize_diagnostics_window_range(horizon_range)
     for target in plan["segment_targets"]:
@@ -7403,6 +7980,9 @@ def _block18_patch_functional_horizon_playback(
         patched_figure["layout"]["annotations"][annotation_index]["text"] = (
             f"{title} ({as_of_date:%Y-%m-%d})"
         )
+    padding = (high - low) * 0.08
+    patched_figure["layout"]["yaxis"]["range"] = [low - padding, high + padding]
+    patched_figure["layout"]["yaxis"]["autorange"] = False
     return patched_figure, as_of_date
 
 
@@ -7470,6 +8050,7 @@ def _block18_cached_tab_figure(
         display_range_value = "full"
         selected_benchmarks = []
     cache_key = (
+        _zscore_baseline_key(),
         active_tab,
         int(window),
         display_range_value,
@@ -7493,9 +8074,7 @@ def _block18_cached_tab_figure(
         int(cache_version or 0),
     )
     if cache_key not in block18_base_figure_cache:
-        if len(block18_base_figure_cache) >= 24:
-            block18_base_figure_cache.clear()
-        block18_base_figure_cache[cache_key] = _block18_build_tab_figure(
+        figure = _block18_build_tab_figure(
             active_tab, window, display_range_value, selected_benchmarks,
             ratio_type,
             autocorrelation_lag_range,
@@ -7508,6 +8087,7 @@ def _block18_cached_tab_figure(
             first_passage_end_condition,
             first_passage_start_sign, first_passage_end_sign,
         )
+        store_bounded(block18_base_figure_cache, cache_key, figure, limit=24)
     return go.Figure(block18_base_figure_cache[cache_key])
 
 def _block18_next_playback_state(trigger_id, playing, position, active_tab):
@@ -7566,7 +8146,7 @@ def _block18_render_dashboard_figure(
 
     try:
         _block18_validate_peer_state(active_tab, required_benchmarks=selected_benchmarks)
-        if active_tab in {"risk", "systematic_risk", "kappa", "pezier_white", "cornish_fisher", "autocorrelation", "first_passage", "drawdown", "correlation", "volatility_efficiency"}:
+        if active_tab in {"risk", "systematic_risk", "kappa", "pezier_white", "cornish_fisher", "autocorrelation", "first_passage", "drawdown", "volatility_efficiency", "garch"}:
             window = _block18_validate_window(window_value)
             figure = _block18_cached_tab_figure(
                 active_tab, window, display_range_value, selected_benchmarks,
@@ -7601,6 +8181,7 @@ def _block18_render_dashboard_figure(
                 figure,
                 display_range_value,
                 preserve_benchmark_selector=active_tab == "heatmap",
+                preserve_all_controls=active_tab == "kappa",
             )
             if active_tab == "first_passage" and hasattr(figure.layout, "xaxis3"):
                 # The third x-axis is a numeric duration histogram, not a date axis.
@@ -7623,7 +8204,7 @@ def _block18_render_dashboard_figure(
                     history_start,
                     history_end,
                 )
-        if active_tab in {"heatmap", "historical_surface_3d", "window_diagnostics", "risk", "systematic_risk", "correlation"}:
+        if active_tab in {"heatmap", "historical_surface_3d", "window_diagnostics", "risk", "systematic_risk", "drawdown"}:
             status += " | Benchmarks: " + _block18_benchmark_selection_label(selected_benchmarks)
         if active_tab in {"heatmap", "historical_surface_3d"}:
             status += f" | Horizons: {diagnostics_window_range[0]}-{diagnostics_window_range[1]} days"
@@ -7644,12 +8225,151 @@ def _block18_render_dashboard_figure(
             )
         elif active_tab in block18_ratio_dependent_tabs:
             status += f" | Ratio: {ratio_label}"
-        return _block18_apply_typography(figure), status
+        if active_tab in block18_zscore_baseline_tabs:
+            status += " | Z-score baseline: " + _block18_baseline_label()
+        return _block18_apply_typography(_finish_zscore_figure(figure)), status
     except Exception as error:
         message = f"{label} could not render: {error}"
         return _block18_apply_typography(
             _block18_error_figure(message, height=block18_tab_config[active_tab]["height"])
         ), message
+
+def _block18_baseline_label():
+    mode, days, lookback = _zscore_baseline.get()
+    if mode == "trailing":
+        return f"Trailing {days} trading days (through chart end / playback date)"
+    if mode == "visible":
+        return f"Visible lookback ({_block18_display_range_label(lookback)})"
+    return "Full history (through chart end / playback date)"
+
+
+def _block18_route_dashboard_graph(function):
+    """Keep Horizon Snapshot isolated from every other tab's Plotly state."""
+    from functools import wraps
+    from inspect import signature
+    parameters = signature(function)
+
+    @wraps(function)
+    def render(*args, **kwargs):
+        values = parameters.bind(*args, **kwargs).arguments
+        output = function(*args, **kwargs)
+        figure, style, status, animate, *remaining = output
+        if values["active_tab"] == "window_diagnostics":
+            return (
+                no_update, no_update,
+                figure, style,
+                status, False, animate,
+                *remaining,
+            )
+        return (
+            figure, style,
+            no_update, no_update,
+            status, animate, False,
+            *remaining,
+        )
+    return render
+
+
+def _block18_dashboard_outputs(function):
+    """Render all active-tab charts under one callback's loading lifecycle."""
+    from functools import wraps
+    from inspect import signature
+    parameters = signature(function)
+
+    @wraps(function)
+    def render(*args, **kwargs):
+        values = parameters.bind(*args, **kwargs).arguments
+        if isinstance(values["ratio_type"], (list, tuple)):
+            keys = metric_keys(values["ratio_type"])
+            if values["active_tab"] not in (block18_ratio_dependent_tabs | {"risk_compounding_v2"}):
+                return render(**dict(values, ratio_type=keys[0]))
+            renders = []
+            for key in keys:
+                single = dict(values, ratio_type=key)
+                # A reference comparison needs complete figures, not a patch
+                # calculated against a single-reference trace layout.
+                single["rendered_tab"] = None
+                renders.append(render(**single))
+            if not renders:
+                raise ValueError("Select at least one reference benchmark")
+            output = list(renders[0])
+            labels = [_block18_ratio_label(key) for key in keys]
+            for index, item in enumerate(output):
+                if values["active_tab"] == "risk_compounding_v2" and index == 7:
+                    continue  # Volatility drag is independent of the reference.
+                if isinstance(item, go.Figure):
+                    output[index] = combine_reference_figures(
+                        [result[index] for result in renders], labels
+                    )
+            output[2] = " | ".join(str(result[2]) for result in renders)
+            if isinstance(output[0], go.Figure) and isinstance(output[1], dict):
+                output[1] = dict(output[1], height=_block18_graph_height(output[0], 1125))
+            return tuple(output)
+        main = function(*args, **kwargs)
+        combined = (no_update,) * 4
+        panels = (no_update,) * len(block18_metric_graph_specs)
+        active_tab = values["active_tab"]
+        if active_tab == "risk_compounding_v2":
+            combined = _update_risk_compounding_v2_view(
+                active_tab, values["_n_clicks"], values["display_range_value"],
+                values["ratio_type"], values["selected_benchmarks"],
+                values["first_passage_start_sign"], values["first_passage_start_condition"],
+                values["first_passage_threshold"], values["first_passage_end_sign"],
+                values["first_passage_end_condition"], values["first_passage_end_threshold"],
+                values["window"],
+            )
+        elif active_tab == "volatility_efficiency":
+            panels = _update_volatility_efficiency_panels(
+                active_tab, values["_n_clicks"], values["display_range_value"], values["window"],
+            )
+        # Track which view owns the mounted figure for playback patching.
+        return (*main, *combined, *panels, active_tab)
+    return render
+
+
+def _block18_baseline_callback(*dependencies, **options):
+    """Give each callback its own baseline context, including concurrent requests.
+
+    Keep existing callback signatures intact while inserting the shared inputs
+    before State dependencies, as required by Dash's callback argument ordering.
+    """
+    from functools import wraps
+    input_count = sum(isinstance(item, Input) for item in dependencies)
+    outputs = [item for item in dependencies if isinstance(item, Output)]
+    inputs = [item for item in dependencies if isinstance(item, Input)]
+    states = [item for item in dependencies if isinstance(item, State)]
+    original_values = inputs + states
+    lookback_index = next((i for i, item in enumerate(original_values)
+                           if item.component_id == "shared-display-range-dropdown"), None)
+    extra_states = [] if lookback_index is not None else [State("shared-display-range-dropdown", "value")]
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args):
+            mode, days = args[input_count:input_count + 2]
+            original = args[:input_count] + args[input_count + 2:]
+            if extra_states:
+                lookback = original[-1]
+                original = original[:-1]
+            else:
+                lookback = original[lookback_index]
+            mode = mode if mode in {"full", "visible", "trailing"} else "full"
+            try:
+                days = max(2, int(days or 252))
+            except (TypeError, ValueError):
+                days = 252
+            token = _zscore_baseline.set((mode, days, lookback))
+            try:
+                return function(*original)
+            finally:
+                _zscore_baseline.reset(token)
+        return block18_dash_app.callback(
+            *outputs, *inputs,
+            Input("shared-zscore-baseline", "value"),
+            Input("shared-zscore-days", "value"),
+            *states, *extra_states, **options,
+        )(wrapped)
+    return decorate
+
 
 block18_initial_figure, block18_initial_status = _block18_render_dashboard_figure(
     block18_default_tab,
@@ -7702,14 +8422,46 @@ block18_controls = html.Div(
                     style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"},
                 ),
                 dcc.Dropdown(
-                    id="shared-ratio-dropdown",
+                    id="shared-metric-type-dropdown",
                     options=block18_ratio_options,
                     value=block18_default_ratio_type,
                     clearable=False,
-                    style={"width": "360px", "color": "#0f172a"},
+                    style={"width": "220px", "color": "#0f172a"},
                 ),
+                # Preserve the resolved metric key consumed by chart callbacks.
+                dcc.Store(id="shared-ratio-dropdown", data=block18_default_ratio_type),
             ]
         ),
+        html.Div([
+            html.Div("Reference benchmarks", style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"}),
+            dcc.Dropdown(
+                id="shared-metric-reference-dropdown",
+                options=[{"label": symbol, "value": symbol} for symbol in benchmark_order],
+                value=[default_benchmark] if default_benchmark else [],
+                multi=True,
+                clearable=False,
+                style={"width": "440px", "color": "#0f172a"},
+            ),
+            html.Div("Select one or more references; each metric/reference combination is plotted.", style={"fontSize": "10px", "color": "#94a3b8"}),
+        ], id="shared-metric-reference-control", style={"display": "none"}),
+        html.Div([
+            html.Div("Z-score baseline", style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"}),
+            dcc.Dropdown(
+                id="shared-zscore-baseline",
+                options=[{"label": "Full history", "value": "full"},
+                         {"label": "Visible lookback", "value": "visible"},
+                         {"label": "Trailing N trading days", "value": "trailing"}],
+                value="full", clearable=False,
+                style={"width": "220px", "color": "#0f172a"},
+            ),
+            html.Div([
+                html.Label("Baseline trading days", htmlFor="shared-zscore-days"),
+                dcc.Input(id="shared-zscore-days", type="number", min=2, step=1,
+                          value=252, debounce=True, style={"width": "90px"}),
+            ], id="shared-zscore-days-control", style={"display": "none"}),
+            html.Div("Comparison and horizon z-scores; playback uses history through its date.",
+                     style={"fontSize": "10px", "color": "#94a3b8", "maxWidth": "260px"}),
+        ], id="shared-zscore-control"),
         html.Div(
             [
                 html.Div("Lookback", style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"}),
@@ -7724,7 +8476,7 @@ block18_controls = html.Div(
         ),
         html.Div(
             [
-                html.Div("Benchmark indices", style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"}),
+                html.Div("Comparison benchmarks", style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "4px"}),
                 dcc.Dropdown(
                     id="benchmark-index-dropdown",
                     options=[{"label": symbol, "value": symbol} for symbol in benchmark_order],
@@ -8172,17 +8924,15 @@ block18_playback_controls = html.Div(
 )
 
 block18_metric_graph_specs = [
-    ("volatility", "Volatility & GARCH(1,1)", "1 / 1"),
-    ("entropy", "Normalized Entropy", "1 / 2"),
-    ("autocorrelation", "Lag-1 Autocorrelation", "2 / 1"),
-    ("hurst", "Hurst Exponent", "2 / 2"),
-    ("vol_of_vol", "Volatility of Volatility", "3 / 1 / 4 / 3"),
-    ("skew", "Rolling Skew Z-Score", "4 / 1 / 5 / 3"),
-    ("kurtosis", "Rolling Excess Kurtosis Z-Score", "5 / 1 / 6 / 3"),
-    ("gini", "Rolling Gini Z-Score", "6 / 1 / 7 / 3"),
+    ("return_distribution", "Return Distribution vs Normal Baseline", "1 / 1 / 2 / 2"),
+    ("return_distribution_surface", "Rolling Return Distribution Surface", "1 / 2 / 2 / 3"),
+    ("skew", "Rolling Skew Z-Score", "2 / 1 / 3 / 3"),
+    ("kurtosis", "Rolling Excess Kurtosis Z-Score", "3 / 1 / 4 / 3"),
+    ("gini", "Rolling Gini Z-Score", "4 / 1 / 5 / 3"),
 ]
 
 def _block18_metric_loading_panel(metric_key, title, grid_area):
+    panel_height = 680 if metric_key in {"return_distribution", "return_distribution_surface"} else 430
     return html.Div(
         dcc.Loading(
             id=f"{metric_key}-loading",
@@ -8196,14 +8946,15 @@ def _block18_metric_loading_panel(metric_key, title, grid_area):
                 ],
                 style={"textAlign": "center"},
             ),
-            delay_show=75,
+            delay_show=0,
             delay_hide=100,
-            parent_style={"minHeight": "260px", "backgroundColor": "#0b0f14"},
+            overlay_style={"visibility": "hidden", "opacity": 0, "overflow": "hidden"},
+            parent_style={"minHeight": f"{panel_height}px", "backgroundColor": "#0b0f14"},
             children=dcc.Graph(
                 id=f"volatility-efficiency-{metric_key}-graph",
-                figure=_block18_error_figure(f"Loading {title}...", height=430),
+                figure=_block18_error_figure(f"Loading {title}...", height=panel_height),
                 config={"responsive": True, "displaylogo": False},
-                style={"height": "430px"},
+                style={"height": f"{panel_height}px"},
             ),
         ),
         style={"gridArea": grid_area, "minWidth": 0},
@@ -8214,7 +8965,7 @@ block18_volatility_efficiency_grid = html.Div(
     id="volatility-efficiency-plot-grid",
     style={
         "display": "none", "gridTemplateColumns": "minmax(0, 1fr) minmax(0, 1fr)",
-        "gridTemplateRows": "repeat(6, auto)", "gap": "14px", "marginTop": "12px",
+        "gridTemplateRows": "repeat(4, auto)", "gap": "14px", "marginTop": "12px",
     },
 )
 
@@ -8243,14 +8994,15 @@ def _block18_combined_section(title, subtitle, graph_id, height, accent):
                     ],
                     style={"textAlign": "center"},
                 ),
-                delay_show=75,
+                delay_show=0,
                 delay_hide=100,
+                overlay_style={"visibility": "hidden", "opacity": 0, "overflow": "hidden"},
                 parent_style={"minHeight": f"{height}px", "backgroundColor": "#0b0f14"},
                 children=dcc.Graph(
                     id=graph_id,
                     figure=_block18_error_figure(f"Loading {title}...", height=height),
                     config={"responsive": True, "displaylogo": False},
-                    style={"height": f"{height}px"},
+                    style={"minHeight": f"{height}px"},
                 ),
             ),
         ],
@@ -8297,7 +9049,9 @@ block18_risk_compounding_v2_view = html.Div(
     style={"display": "none", "gap": "18px", "marginTop": "12px"},
 )
 
-block18_dash_app = Dash(__name__)
+block18_dash_app = Dash(
+    __name__, assets_folder=str(Path(__file__).resolve().parent / "assets")
+)
 
 
 def _block18_loading_panel():
@@ -8341,10 +9095,10 @@ block18_dash_app.index_string = f"""<!DOCTYPE html>
                 border-radius: 50%;
                 animation: quantapp-loading-spin 0.8s linear infinite;
             }}
-            #momentum-efficiency-tab-graph[data-dash-is-loading="true"] {{
-                height: 420px !important;
-                min-height: 420px !important;
-                max-height: 420px !important;
+            /* The server response can finish before Plotly finishes drawing.
+               Keep the previous figure hidden during that client-side work. */
+            .dash-graph--pending {{
+                visibility: hidden;
             }}
             .first-passage-dropdown .Select-control,
             .first-passage-dropdown .Select-menu-outer {{
@@ -8375,6 +9129,14 @@ block18_dash_app.index_string = f"""<!DOCTYPE html>
 block18_dash_app.layout = html.Div(
     [
         block18_controls,
+        html.Div([
+            html.Button("Refresh peers now", id="refresh-peers-button", n_clicks=0,
+                        disabled=not include_factor_peer_index),
+            html.Div([
+                html.Div(f"{level}: {peer_status(meta)}")
+                for level, (_, meta) in factor_peer_refresh_results.items()
+            ], id="peer-refresh-status"),
+        ], style={"padding": "10px", "color": "#cbd5e1", "fontSize": "12px"}),
         block18_autocorrelation_controls,
         block18_first_passage_controls,
         dcc.Interval(
@@ -8384,6 +9146,7 @@ block18_dash_app.layout = html.Div(
             disabled=True,
         ),
         dcc.Store(id="diagnostics-playback-playing", data=False),
+        dcc.Store(id="momentum-efficiency-rendered-tab", data=block18_default_tab),
         dcc.Tabs(
             id="momentum-efficiency-view-tabs",
             value=block18_default_tab,
@@ -8392,7 +9155,7 @@ block18_dash_app.layout = html.Div(
         ),
         dcc.Graph(
             id="functional-horizon-summary-graph",
-            figure=_block18_error_figure("Functional Horizon summary", height=480),
+            figure=_block18_error_figure("Horizon Snapshot summary", height=480),
             config={"responsive": True, "displaylogo": False},
             style={"display": "none", "height": "480px"},
         ),
@@ -8400,15 +9163,15 @@ block18_dash_app.layout = html.Div(
         dcc.Loading(
             id="momentum-efficiency-graph-loading",
             custom_spinner=_block18_loading_panel(),
-            delay_show=75,
+            delay_show=0,
             delay_hide=100,
             target_components={"momentum-efficiency-tab-graph": "figure"},
-            # Keep the graph mounted beneath an opaque placeholder during normal
-            # loads. Playback forces this loader to ``hide``, which leaves the
-            # mounted graph visible while lightweight frame patches arrive.
+            # Hide the mounted plot completely while the replacement renders.
+            # Loader display="hide" bypasses this during playback frame updates.
             overlay_style={
-                "visibility": "visible",
-                "backgroundColor": "#0b0f14",
+                "visibility": "hidden",
+                "opacity": 0,
+                "overflow": "hidden",
             },
             parent_style={
                 "minHeight": "420px",
@@ -8424,6 +9187,32 @@ block18_dash_app.layout = html.Div(
                 style={"height": _block18_graph_height(block18_initial_figure, 2150)},
             ),
         ),
+        dcc.Loading(
+            id="horizon-snapshot-graph-loading",
+            custom_spinner=_block18_loading_panel(),
+            delay_show=0,
+            delay_hide=100,
+            target_components={"horizon-snapshot-graph": "figure"},
+            overlay_style={
+                "visibility": "hidden",
+                "opacity": 0,
+                "overflow": "hidden",
+            },
+            parent_style={
+                "display": "none",
+                "minHeight": "420px",
+                "position": "relative",
+                "backgroundColor": "#0b0f14",
+            },
+            children=dcc.Graph(
+                id="horizon-snapshot-graph",
+                figure=_block18_error_figure("Loading Horizon Snapshot", height=1900),
+                animate=False,
+                animation_options=_block18_animation_options(block18_default_playback_speed),
+                config={"responsive": True, "displaylogo": False},
+                style={"height": "1900px"},
+            ),
+        ),
         block18_risk_compounding_v2_view,
         block18_volatility_efficiency_grid,
     ],
@@ -8433,23 +9222,82 @@ block18_dash_app.layout = html.Div(
     },
 )
 
+@block18_dash_app.callback(
+    Output("shared-ratio-dropdown", "data"),
+    Output("shared-metric-reference-control", "style"),
+    Input("shared-metric-type-dropdown", "value"),
+    Input("shared-metric-reference-dropdown", "value"),
+)
+def _resolve_metric_selection(metric_type, reference):
+    if metric_type in {"sharpe", "sortino"}:
+        return metric_type, {"display": "none"}
+    if metric_type not in {"correlation", "information", "appraisal", "treynor"}:
+        raise ValueError(f"Unknown metric type: {metric_type}")
+    references = [item for item in metric_keys(reference) if item in benchmark_order]
+    if not references:
+        return no_update, {"display": "block"}
+    keys = [f"{metric_type}::{item}" for item in references]
+    return (keys[0] if len(keys) == 1 else keys), {"display": "block"}
+
+
+@block18_dash_app.callback(
+    Output("peer-refresh-status", "children"),
+    Input("refresh-peers-button", "n_clicks"),
+    prevent_initial_call=True,
+    running=[(Output("refresh-peers-button", "disabled"), True, False)],
+)
+def _refresh_peer_caches(n_clicks):
+    results = refresh_gics_benchmarks(
+        PROJECT_ROOT, factor_peer_index_source_ticker or ticker_str,
+        period=period, interval=interval, force=True,
+    )
+    return [
+        html.Div(f"{level}: {peer_status(meta)}")
+        for level, (_, meta) in results.items()
+    ] + [html.Div("Refresh attempt finished. Rerun the notebook launch cell to apply saved data to all charts.")]
+
+
 block18_metric_panel_cache = {}
+
+
+@block18_dash_app.callback(
+    Output("shared-zscore-days-control", "style"),
+    Output("shared-zscore-control", "style"),
+    Input("shared-zscore-baseline", "value"),
+    Input("momentum-efficiency-view-tabs", "value"),
+)
+def _toggle_zscore_days(mode, active_tab):
+    supported = active_tab in block18_zscore_baseline_tabs
+    return (
+        {"display": "flex" if mode == "trailing" else "none", "gap": "8px", "marginTop": "6px"},
+        {"display": "block" if supported else "none"},
+    )
 
 
 @block18_dash_app.callback(
     Output("risk-compounding-v2-view", "style"),
     Output("momentum-efficiency-graph-loading", "parent_style"),
+    Output("horizon-snapshot-graph-loading", "parent_style"),
     Input("momentum-efficiency-view-tabs", "value"),
 )
 def _toggle_risk_compounding_v2_view(active_tab):
     combined_active = active_tab == "risk_compounding_v2"
+    snapshot_active = active_tab == "window_diagnostics"
+    shared_graph_hidden = active_tab in {
+        "risk_compounding_v2", "volatility_efficiency", "window_diagnostics"
+    }
     return (
         {
             "display": "flex" if combined_active else "none",
             "flexDirection": "column", "gap": "18px", "marginTop": "12px",
         },
         {
-            "display": "none" if combined_active else "block",
+            "display": "none" if shared_graph_hidden else "block",
+            "minHeight": "420px", "position": "relative",
+            "backgroundColor": "#0b0f14",
+        },
+        {
+            "display": "block" if snapshot_active else "none",
             "minHeight": "420px", "position": "relative",
             "backgroundColor": "#0b0f14",
         },
@@ -8551,11 +9399,17 @@ def _toggle_historical_horizon_range(active_tab):
     Output("functional-horizon-summary-graph", "style"),
     Input("momentum-efficiency-view-tabs", "value"),
     Input("shared-update-button", "n_clicks"),
-    Input("shared-ratio-dropdown", "value"),
+    Input("shared-ratio-dropdown", "data"),
 )
 def _update_functional_horizon_summary(active_tab, _update_clicks, ratio_type):
     if active_tab != "window_diagnostics":
         return no_update, {"display": "none"}
+    if isinstance(ratio_type, (list, tuple)):
+        keys = metric_keys(ratio_type)
+        figures = [_update_functional_horizon_summary(active_tab, _update_clicks, key)[0]
+                   for key in keys]
+        figure = combine_reference_figures(figures, [_block18_ratio_label(key) for key in keys])
+        return figure, {"display": "block", "height": _block18_graph_height(figure, 480)}
     ratio_type = _block18_normalize_ratio_type(ratio_type)
     source = _block18_ratio_diagnostics_source_figure(ratio_type)
     summary = _block18_functional_horizon_summary_figure(
@@ -8590,28 +9444,31 @@ def _block18_build_metric_panels(window, display_range_value, cache_version=0):
     cache_key = (window, display_range_value, int(cache_version or 0))
     if cache_key in block18_metric_panel_cache:
         return tuple(go.Figure(figure) for figure in block18_metric_panel_cache[cache_key])
-    volatility_figure = _block18_volatility_efficiency_figure(window)
     distribution_figure = _block18_return_distribution_figure(window)
+    return_distribution_panel = _block18_latest_return_distribution_panel(window)
+    return_distribution_surface = _block18_return_distribution_surface(
+        window, display_range_value
+    )
     panel_specs = [
-        (volatility_figure, "x", f"{ticker_str} {window}-Day Realized Volatility vs Rolling GARCH(1,1)", "Annualized %", None, True),
-        (volatility_figure, "x2", f"Normalized Entropy ({window}d)", "0-1", 1.0, False),
-        (volatility_figure, "x3", f"Lag-1 Autocorrelation ({window}d)", "Correlation", 0.0, False),
-        (volatility_figure, "x4", f"Hurst Exponent ({window}d)", "H", 0.5, False),
-        (volatility_figure, "x5", f"Volatility of Volatility ({window}d)", "Percentage pts", None, False),
         (distribution_figure, "x", f"Rolling Skew Z-Score ({window}d)", "Z-Score", None, False),
         (distribution_figure, "x2", f"Rolling Excess Kurtosis Z-Score ({window}d)", "Z-Score", None, False),
         (distribution_figure, "x3", f"Rolling Gini Z-Score ({window}d)", "Z-Score", None, False),
     ]
-    panels = tuple(
+    time_series_panels = tuple(
         _block18_extract_metric_panel(
             source, axis_name, title, yaxis_title, display_range_value,
             reference_level=reference_level, showlegend=showlegend,
         )
         for source, axis_name, title, yaxis_title, reference_level, showlegend in panel_specs
     )
-    if len(block18_metric_panel_cache) >= 12:
-        block18_metric_panel_cache.clear()
-    block18_metric_panel_cache[cache_key] = tuple(go.Figure(figure) for figure in panels)
+    panels = (
+        (return_distribution_panel, return_distribution_surface)
+        + time_series_panels
+    )
+    store_bounded(
+        block18_metric_panel_cache, cache_key,
+        tuple(go.Figure(figure) for figure in panels), limit=12,
+    )
     return panels
 
 @block18_dash_app.callback(
@@ -8624,30 +9481,12 @@ def _toggle_volatility_efficiency_grid(active_tab):
     return {
         "display": "grid",
         "gridTemplateColumns": "minmax(0, 1fr) minmax(0, 1fr)",
-        "gridTemplateRows": "repeat(6, auto)",
+        "gridTemplateRows": "repeat(4, auto)",
         "gap": "14px",
         "marginTop": "12px",
     }
 
 
-@block18_dash_app.callback(
-    Output("risk-compounding-v2-risk-graph", "figure"),
-    Output("risk-compounding-v2-risk-adjusted-passage-graph", "figure"),
-    Output("risk-compounding-v2-spread-passage-graph", "figure"),
-    Output("risk-compounding-v2-volatility-drag-passage-graph", "figure"),
-    Input("momentum-efficiency-view-tabs", "value"),
-    Input("shared-update-button", "n_clicks"),
-    Input("shared-display-range-dropdown", "value"),
-    Input("shared-ratio-dropdown", "value"),
-    Input("benchmark-index-dropdown", "value"),
-    Input("first-passage-start-sign-dropdown", "value"),
-    Input("first-passage-start-condition-dropdown", "value"),
-    Input("first-passage-threshold-input", "value"),
-    Input("first-passage-end-sign-dropdown", "value"),
-    Input("first-passage-end-condition-dropdown", "value"),
-    Input("first-passage-end-threshold-input", "value"),
-    State("shared-window-input", "value"),
-)
 def _update_risk_compounding_v2_view(
     active_tab, update_clicks, display_range_value, ratio_type,
     selected_benchmarks, first_passage_start_sign,
@@ -8699,13 +9538,6 @@ def _update_risk_compounding_v2_view(
     return integrated_risk_figure, *analytics_figures
 
 
-@block18_dash_app.callback(
-    *[Output(f"volatility-efficiency-{metric_key}-graph", "figure") for metric_key, _, _ in block18_metric_graph_specs],
-    Input("momentum-efficiency-view-tabs", "value"),
-    Input("shared-update-button", "n_clicks"),
-    State("shared-display-range-dropdown", "value"),
-    State("shared-window-input", "value"),
-)
 def _update_volatility_efficiency_panels(active_tab, update_clicks, display_range_value, window):
     if active_tab != "volatility_efficiency":
         return tuple([no_update] * len(block18_metric_graph_specs))
@@ -8722,7 +9554,7 @@ def _update_volatility_efficiency_panels(active_tab, update_clicks, display_rang
 
 @block18_dash_app.callback(
     Output("diagnostics-playback-interval", "interval"),
-    Output("momentum-efficiency-tab-graph", "animation_options"),
+    Output("horizon-snapshot-graph", "animation_options"),
     Input("diagnostics-playback-speed-dropdown", "value"),
 )
 def _update_diagnostics_playback_speed(speed_milliseconds):
@@ -8750,12 +9582,16 @@ def _update_diagnostics_playback_speed(speed_milliseconds):
     Input("diagnostics-date-picker", "date"),
     Input("momentum-efficiency-view-tabs", "value"),
     Input("benchmark-index-dropdown", "value"),
-    Input("shared-ratio-dropdown", "value"),
+    Input("shared-ratio-dropdown", "data"),
     Input("diagnostics-horizon-min-input", "value"),
     Input("diagnostics-horizon-max-input", "value"),
     Input("diagnostics-spline-toggle", "value"),
     Input("diagnostics-raw-overlay-toggle", "value"),
     Input("diagnostics-spline-strength-slider", "value"),
+    Input("shared-zscore-baseline", "value"),
+    Input("shared-zscore-days", "value"),
+    Input("shared-display-range-dropdown", "value"),
+    Input("shared-update-button", "n_clicks"),
     State("diagnostics-playback-playing", "data"),
     State("diagnostics-asof-slider", "value"),
 )
@@ -8763,9 +9599,12 @@ def _update_diagnostics_playback(
     _n_clicks, _n_intervals, _step_back_clicks, _step_forward_clicks,
     selected_date, active_tab, _selected_benchmarks, _ratio_type,
     _window_min, _window_max,
-    _spline_toggle, _raw_overlay_toggle, _spline_strength, playing, position
+    _spline_toggle, _raw_overlay_toggle, _spline_strength,
+    _baseline, _baseline_days, _lookback, _update_clicks, playing, position
 ):
     if ctx.triggered_id in {
+        "shared-zscore-baseline", "shared-zscore-days",
+        "shared-display-range-dropdown", "shared-update-button",
         "benchmark-index-dropdown",
         "shared-ratio-dropdown",
         "diagnostics-horizon-min-input",
@@ -8798,20 +9637,6 @@ def _update_diagnostics_playback(
     }
     return next_playing, interval_disabled, button_label, slider_value, controls_style
 
-@block18_dash_app.callback(
-    Output("momentum-efficiency-tab-graph", "figure", allow_duplicate=True),
-    Input("diagnostics-asof-slider", "value"),
-    State("momentum-efficiency-view-tabs", "value"),
-    State("benchmark-index-dropdown", "value"),
-    State("diagnostics-horizon-min-input", "value"),
-    State("diagnostics-horizon-max-input", "value"),
-    State("diagnostics-spline-toggle", "value"),
-    State("diagnostics-raw-overlay-toggle", "value"),
-    State("diagnostics-spline-strength-slider", "value"),
-    State("shared-update-button", "n_clicks"),
-    State("shared-ratio-dropdown", "value"),
-    prevent_initial_call=True,
-)
 def _patch_functional_horizon_playback_frame(
     playback_position, active_tab, selected_benchmarks,
     diagnostics_horizon_min, diagnostics_horizon_max,
@@ -8846,15 +9671,25 @@ def _patch_functional_horizon_playback_frame(
     return patched_figure if patched_figure is not None else no_update
 
 
-@block18_dash_app.callback(
+@_block18_baseline_callback(
     Output("momentum-efficiency-tab-graph", "figure"),
     Output("momentum-efficiency-tab-graph", "style"),
+    Output("horizon-snapshot-graph", "figure"),
+    Output("horizon-snapshot-graph", "style"),
     Output("shared-view-status", "children"),
     Output("momentum-efficiency-tab-graph", "animate"),
+    Output("horizon-snapshot-graph", "animate"),
+    Output("risk-compounding-v2-risk-graph", "figure"),
+    Output("risk-compounding-v2-risk-adjusted-passage-graph", "figure"),
+    Output("risk-compounding-v2-spread-passage-graph", "figure"),
+    Output("risk-compounding-v2-volatility-drag-passage-graph", "figure"),
+    *[Output(f"volatility-efficiency-{metric_key}-graph", "figure")
+      for metric_key, _, _ in block18_metric_graph_specs],
+    Output("momentum-efficiency-rendered-tab", "data"),
     Input("momentum-efficiency-view-tabs", "value"),
     Input("shared-update-button", "n_clicks"),
     Input("shared-display-range-dropdown", "value"),
-    Input("shared-ratio-dropdown", "value"),
+    Input("shared-ratio-dropdown", "data"),
     Input("benchmark-index-dropdown", "value"),
     Input("historical-horizon-min-input", "value"),
     Input("historical-horizon-max-input", "value"),
@@ -8873,14 +9708,18 @@ def _patch_functional_horizon_playback_frame(
     Input("first-passage-end-sign-dropdown", "value"),
     Input("first-passage-end-condition-dropdown", "value"),
     Input("first-passage-end-threshold-input", "value"),
+    Input("diagnostics-asof-slider", "value"),
     State("shared-window-input", "value"),
-    State("diagnostics-asof-slider", "value"),
+    State("momentum-efficiency-rendered-tab", "data"),
+
     running=[
         (Output("shared-update-button", "disabled"), True, False),
         (Output("shared-update-button", "children"), "Updating ...", "Update"),
         (Output("shared-update-button", "style"), block18_update_button_loading_style, block18_update_button_style),
     ],
 )
+@_block18_route_dashboard_graph
+@_block18_dashboard_outputs
 def _update_momentum_efficiency_dashboard(
     active_tab, _n_clicks, display_range_value, ratio_type,
     selected_benchmarks,
@@ -8891,12 +9730,22 @@ def _update_momentum_efficiency_dashboard(
     autocorrelation_sampling_mode, autocorrelation_comparison_lag,
     first_passage_start_sign, first_passage_start_condition, first_passage_threshold,
     first_passage_end_sign, first_passage_end_condition,
-    first_passage_end_threshold, window,
-    playback_position,
+    first_passage_end_threshold, playback_position,
+    window, rendered_tab,
 ):
     active_tab = active_tab if active_tab in block18_tab_config else block18_default_tab
     ratio_type = _block18_normalize_ratio_type(ratio_type)
     selected_benchmarks = _block18_normalize_benchmark_selection(selected_benchmarks)
+    if (active_tab == rendered_tab == "window_diagnostics"
+            and ctx.triggered_id == "diagnostics-asof-slider"):
+        patch = _patch_functional_horizon_playback_frame(
+            playback_position, active_tab, selected_benchmarks,
+            diagnostics_horizon_min, diagnostics_horizon_max,
+            spline_toggle, raw_overlay_toggle, spline_strength, _n_clicks, ratio_type,
+        )
+        if patch is not no_update:
+            return patch, no_update, no_update, False
+        # A missing/evicted plan needs a full render, not a frozen slider.
     if active_tab == "risk_compounding_v2":
         try:
             combined_window = _block18_validate_window(window)
@@ -8904,15 +9753,21 @@ def _update_momentum_efficiency_dashboard(
         except (TypeError, ValueError):
             window_label = str(window)
         status = (
-            f"Risk & Compounding v.2 | Window: {window_label} | "
+            f"Historical Window Profile | Window: {window_label} | "
             f"Display: {_block18_display_range_label(display_range_value)} | "
             f"Ratio: {_block18_ratio_label(ratio_type)} | Benchmarks: "
-            f"{_block18_benchmark_selection_label(selected_benchmarks)}"
+            f"{_block18_benchmark_selection_label(selected_benchmarks)} | "
+            f"Z-score baseline: {_block18_baseline_label()}"
         )
-        return no_update, {"display": "none"}, status, False
+        # The outer loading container is already hidden by
+        # _toggle_risk_compounding_v2_view. Keep the Plotly graph itself mounted
+        # at its previous size so leaving this composite view does not ask the
+        # browser to initialize the next figure from display:none/zero width.
+        return no_update, no_update, status, False
     if active_tab == "volatility_efficiency":
         status = f"Volatility, Efficiency & Distribution | Window: {window} trading days | Updating individual panels"
-        return no_update, {"display": "none"}, status, False
+        # Hide the loading container, preserving the mounted graph's dimensions.
+        return no_update, no_update, status, False
     historical_horizon_range = _block18_horizon_range_from_inputs(
         historical_horizon_min, historical_horizon_max
     )

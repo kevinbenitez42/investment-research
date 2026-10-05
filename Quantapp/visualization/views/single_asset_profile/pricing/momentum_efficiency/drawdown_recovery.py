@@ -692,9 +692,11 @@ def plot_candlestick_drawdown_recovery_view(
                 candlestick_bundle,
                 start=visible_start,
                 end=global_end,
+                overlay_mode=default_overlay,
             )
             if price_range is not None:
                 layout_updates["yaxis.range"] = price_range
+                layout_updates["yaxis.autorange"] = False
 
             drawdown_range = build_numeric_axis_range(
                 visible_drawdown_axis_series(start=visible_start, end=global_end),
@@ -735,7 +737,7 @@ def plot_candlestick_drawdown_recovery_view(
         fig.update_xaxes(range=initial_range, row=3, col=1)
         initial_layout = combined_range(timeframe_options[default_timeframe_index][1])
         if "yaxis.range" in initial_layout:
-            fig.update_yaxes(range=initial_layout["yaxis.range"], row=1, col=1)
+            fig.update_yaxes(range=initial_layout["yaxis.range"], autorange=False, row=1, col=1)
         if "yaxis2.range" in initial_layout:
             fig.update_yaxes(range=initial_layout["yaxis2.range"], row=2, col=1)
         if "yaxis3.range" in initial_layout:

@@ -17,6 +17,7 @@ def get_market_history(
     interval: str = "1d",
     provider: str = "yfinance",
     align: bool = True,
+    cache_ttl_seconds: float | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch, normalize, and optionally align market history for requested symbols."""
     requested_symbols = list(symbols)
@@ -33,5 +34,6 @@ def get_market_history(
         requested_symbols,
         period=period,
         interval=interval,
+        **({"cache_ttl_seconds": cache_ttl_seconds} if cache_ttl_seconds is not None else {}),
     )
     return prepare_history_map(raw_history, align=align)
